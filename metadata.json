@@ -1,0 +1,7 @@
+{
+  "name": "BotStudio",
+  "description": "A feature-rich Discord bot editor with multi-language code editing, interactive terminal, bot simulator, embed designer, and project templates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
