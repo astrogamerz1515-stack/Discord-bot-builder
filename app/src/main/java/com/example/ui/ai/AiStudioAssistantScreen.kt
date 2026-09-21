@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
@@ -62,6 +63,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ai.AiCallResult
+import com.example.ai.AiKeyManager
+import com.example.ai.AiProvider
 import com.example.ai.GeminiApiClient
 import com.example.ui.AppTab
 import com.example.ui.BotStudioViewModel
@@ -95,12 +99,16 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
     val fileContent by viewModel.activeFileContent.collectAsState()
     val diagnostics by viewModel.codeDiagnostics.collectAsState()
 
+    val currentProvider by AiKeyManager.selectedProvider.collectAsState()
+    val currentModel by AiKeyManager.selectedModel.collectAsState()
+
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
     var selectedMode by remember { mutableStateOf(AiTaskMode.FLOW_GEN) }
     var userPrompt by remember { mutableStateOf("") }
     var aiResult by remember { mutableStateOf("") }
+    var activeModelResultInfo by remember { mutableStateOf("") }
     var isGenerating by remember { mutableStateOf(false) }
     var copiedToClipboard by remember { mutableStateOf(false) }
 
@@ -122,50 +130,40 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "Gemini AI",
+                        contentDescription = "AI Studio",
                         tint = DiscordBlurple,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "AI Bot Architect & Automation",
+                        text = "AI Bot Architect & Multi-Model Studio",
                         color = DiscordTextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
-                    text = "Gemini 3.5 Flash • Natural language bot generation & diagnostics",
+                    text = "${currentProvider.displayName} • $currentModel • Auto-quota failover",
                     color = DiscordTextSecondary,
                     fontSize = 12.sp
                 )
             }
 
-            Surface(
-                color = if (hasKey) DiscordGreen.copy(alpha = 0.2f) else DiscordYellow.copy(alpha = 0.2f),
-                shape = RoundedCornerShape(12.dp)
+            // Button to jump to API Keys & Models
+            Button(
+                onClick = { viewModel.setTab(AppTab.API_KEYS) },
+                colors = ButtonDefaults.buttonColors(containerColor = DiscordElevated),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.height(30.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(if (hasKey) DiscordGreen else DiscordYellow, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (hasKey) "Gemini Live" else "Demo Mode",
-                        color = if (hasKey) DiscordGreen else DiscordYellow,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(13.dp), tint = DiscordTextPrimary)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("API Keys", fontSize = 11.sp, color = DiscordTextPrimary)
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Preset Mode Selector Tabs
         Row(
@@ -275,6 +273,7 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                             if (userPrompt.isNotBlank() && !isGenerating) {
                                 isGenerating = true
                                 aiResult = ""
+                                activeModelResultInfo = ""
                                 copiedToClipboard = false
                                 coroutineScope.launch {
                                     val sysInstruction = """
@@ -294,8 +293,9 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                                         ```
                                     """.trimIndent()
 
-                                    val res = GeminiApiClient.callGemini(fullPrompt, sysInstruction)
-                                    aiResult = res
+                                    val callResult = GeminiApiClient.callAiWithFailover(fullPrompt, sysInstruction)
+                                    aiResult = callResult.content
+                                    activeModelResultInfo = "${callResult.providerUsed.displayName} (${callResult.modelUsed})" + if (callResult.isFallback) " • Fallback Mode" else ""
                                     isGenerating = false
                                 }
                             }
@@ -318,9 +318,9 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // AI Output Section
+        // AI Response Container
         Card(
             colors = CardDefaults.cardColors(containerColor = DiscordSurface),
             shape = RoundedCornerShape(8.dp),
@@ -328,20 +328,16 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(12.dp)
-            ) {
+            Column(modifier = Modifier.padding(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "AI Solution & Generated Artifact",
+                        text = if (activeModelResultInfo.isNotBlank()) "AI Output • $activeModelResultInfo" else "AI Output",
                         color = DiscordTextPrimary,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
 
@@ -359,24 +355,21 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                                 Icon(
                                     imageVector = if (copiedToClipboard) Icons.Default.Check else Icons.Default.ContentCopy,
                                     contentDescription = "Copy",
-                                    tint = if (copiedToClipboard) DiscordGreen else DiscordTextPrimary,
+                                    tint = if (copiedToClipboard) DiscordGreen else DiscordTextSecondary,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = if (copiedToClipboard) "Copied!" else "Copy",
-                                    color = if (copiedToClipboard) DiscordGreen else DiscordTextPrimary,
+                                    color = DiscordTextPrimary,
                                     fontSize = 11.sp
                                 )
                             }
 
-                            // Insert into active file
+                            // Insert to active file button
                             Button(
                                 onClick = {
-                                    // Extract code block or insert full response
-                                    val codeRegex = Regex("```(?:[a-zA-Z]*)\\n([\\s\\S]*?)```")
-                                    val match = codeRegex.find(aiResult)
-                                    val codeToInsert = match?.groupValues?.get(1) ?: aiResult
+                                    val codeToInsert = extractCodeBlocks(aiResult).ifBlank { aiResult }
                                     viewModel.updateActiveFileContent(fileContent + "\n\n" + codeToInsert)
                                     viewModel.setTab(AppTab.EDITOR)
                                 },
@@ -416,7 +409,7 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Choose an AI mode above or enter a prompt to generate slash commands, fix errors, or create test suites.",
+                                    text = "Choose an AI mode above or enter a prompt to generate slash commands, fix errors, or create test suites with automatic quota fallback.",
                                     color = DiscordTextMuted,
                                     fontSize = 13.sp,
                                     fontFamily = FontFamily.SansSerif
@@ -443,5 +436,15 @@ fun AiStudioAssistantScreen(viewModel: BotStudioViewModel) {
                 }
             }
         }
+    }
+}
+
+private fun extractCodeBlocks(markdown: String): String {
+    val regex = "```(?:[a-zA-Z0-9_-]+)?\\s*\\n([\\s\\S]*?)```".toRegex()
+    val matches = regex.findAll(markdown).map { it.groupValues[1].trim() }.toList()
+    return if (matches.isNotEmpty()) {
+        matches.joinToString("\n\n// Next Code Block\n")
+    } else {
+        markdown
     }
 }

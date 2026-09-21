@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DashboardCustomize
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Storage
@@ -74,11 +76,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BotLanguage
 import com.example.ui.ai.AiStudioAssistantScreen
+import com.example.ui.ai.ApiKeysManagementScreen
 import com.example.ui.config.BotConfigScreen
 import com.example.ui.deploy.DeploymentScreen
 import com.example.ui.editor.CodeEditorScreen
 import com.example.ui.editor.CodeSnippets
 import com.example.ui.embedbuilder.VisualEmbedDesignerScreen
+import com.example.ui.extensions.ExtensionsAndDynamicLoadingScreen
+import com.example.ui.gradle.GradleConfigScreen
 import com.example.ui.install.PackageInstallScreen
 import com.example.ui.simulator.DiscordSimulatorScreen
 import com.example.ui.storage.AdvancedStorageScreen
@@ -177,35 +182,130 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                     color = DiscordTextMuted,
                                     fontSize = 11.sp
                                 )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = DiscordGreen.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(3.dp)
+                                ) {
+                                    Text(
+                                        text = "Open Access",
+                                        color = DiscordGreen,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // New Project Button
-                    Button(
-                        onClick = { viewModel.showNewProjectDialog.value = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
-                        shape = RoundedCornerShape(6.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier
-                            .height(32.dp)
-                            .testTag("btn_top_new_project")
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "New Project", tint = DiscordTextPrimary, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Bot", color = DiscordTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    // Action buttons
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // Quick Gradle Button
+                        IconButton(
+                            onClick = { viewModel.setTab(AppTab.GRADLE) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Build, contentDescription = "Gradle", tint = if (currentTab == AppTab.GRADLE) DiscordBlurple else DiscordTextSecondary, modifier = Modifier.size(18.dp))
+                        }
+
+                        // Quick Extensions Button
+                        IconButton(
+                            onClick = { viewModel.setTab(AppTab.EXTENSIONS) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Extension, contentDescription = "Extensions", tint = if (currentTab == AppTab.EXTENSIONS) DiscordBlurple else DiscordTextSecondary, modifier = Modifier.size(18.dp))
+                        }
+
+                        // New Project Button
+                        Button(
+                            onClick = { viewModel.showNewProjectDialog.value = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("btn_top_new_project")
+                        ) {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = "New Project", tint = DiscordTextPrimary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Bot", color = DiscordTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                // Sub-header Scrollable Tab Strip for direct access to all tabs
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DiscordBackground)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AppTab.values().forEach { tab ->
+                        val isSelected = currentTab == tab
+                        Surface(
+                            color = if (isSelected) DiscordBlurple else DiscordDarker,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.clickable { viewModel.setTab(tab) }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val icon = when (tab) {
+                                    AppTab.EDITOR -> Icons.Default.Code
+                                    AppTab.TERMINAL -> Icons.Default.Terminal
+                                    AppTab.SIMULATOR -> Icons.Default.Chat
+                                    AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize
+                                    AppTab.STORAGE -> Icons.Default.Storage
+                                    AppTab.EXTENSIONS -> Icons.Default.Extension
+                                    AppTab.GRADLE -> Icons.Default.Build
+                                    AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome
+                                    AppTab.API_KEYS -> Icons.Default.Key
+                                    AppTab.PACKAGES -> Icons.Default.Extension
+                                    AppTab.BOT_CONFIG -> Icons.Default.Settings
+                                    AppTab.DEPLOY -> Icons.Default.CloudUpload
+                                }
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = if (isSelected) Color.White else DiscordTextSecondary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = tab.title,
+                                    color = if (isSelected) Color.White else DiscordTextSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
                     }
                 }
             }
         },
         bottomBar = {
             // M3 Bottom Navigation Bar
+            val bottomTabs = listOf(
+                AppTab.EDITOR,
+                AppTab.TERMINAL,
+                AppTab.SIMULATOR,
+                AppTab.EMBED_BUILDER,
+                AppTab.STORAGE,
+                AppTab.EXTENSIONS,
+                AppTab.GRADLE,
+                AppTab.AI_ASSISTANT,
+                AppTab.BOT_CONFIG
+            )
             NavigationBar(
                 containerColor = DiscordDarker,
                 tonalElevation = 0.dp,
                 modifier = Modifier.testTag("bottom_nav_bar")
             ) {
-                AppTab.values().forEach { tab ->
+                bottomTabs.forEach { tab ->
                     val isSelected = currentTab == tab
                     val (icon, label) = when (tab) {
                         AppTab.EDITOR -> Icons.Default.Code to "Editor"
@@ -213,7 +313,10 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                         AppTab.SIMULATOR -> Icons.Default.Chat to "Simulator"
                         AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize to "Embeds"
                         AppTab.STORAGE -> Icons.Default.Storage to "Storage"
+                        AppTab.EXTENSIONS -> Icons.Default.Extension to "Extensions"
+                        AppTab.GRADLE -> Icons.Default.Build to "Gradle"
                         AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome to "AI Studio"
+                        AppTab.API_KEYS -> Icons.Default.Key to "AI Keys"
                         AppTab.PACKAGES -> Icons.Default.Extension to "Install"
                         AppTab.BOT_CONFIG -> Icons.Default.Settings to "Config"
                         AppTab.DEPLOY -> Icons.Default.CloudUpload to "Deploy"
@@ -260,7 +363,10 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 AppTab.SIMULATOR -> DiscordSimulatorScreen(viewModel)
                 AppTab.EMBED_BUILDER -> VisualEmbedDesignerScreen(viewModel)
                 AppTab.STORAGE -> AdvancedStorageScreen(viewModel)
+                AppTab.EXTENSIONS -> ExtensionsAndDynamicLoadingScreen(viewModel)
+                AppTab.GRADLE -> GradleConfigScreen(viewModel)
                 AppTab.AI_ASSISTANT -> AiStudioAssistantScreen(viewModel)
+                AppTab.API_KEYS -> ApiKeysManagementScreen()
                 AppTab.PACKAGES -> PackageInstallScreen(viewModel)
                 AppTab.BOT_CONFIG -> BotConfigScreen(viewModel)
                 AppTab.DEPLOY -> DeploymentScreen(viewModel)

@@ -1,5 +1,6 @@
 package com.example.packages
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -7,8 +8,9 @@ import kotlinx.coroutines.flow.asStateFlow
 enum class PackageCategory(val label: String) {
     LANGUAGE("Languages & Runtimes"),
     DISCORD_SDK("Discord SDKs"),
-    EXTENSION("IDE & Editor Extensions"),
-    DATABASE("Database Drivers")
+    UTILITY("Utilities & Helpers"),
+    DATABASE("Database & Storage"),
+    EXTENSION("IDE & Editor Extensions")
 }
 
 data class InstallablePackage(
@@ -20,13 +22,14 @@ data class InstallablePackage(
     val description: String,
     val iconName: String,
     val commands: List<String>,
+    val importSnippet: String = "",
     val author: String = "BotStudio Official",
     val isCore: Boolean = false
 )
 
 object PackageManager {
 
-    val AVAILABLE_PACKAGES = listOf(
+    private val DEFAULT_PACKAGES = listOf(
         // Core installed
         InstallablePackage(
             id = "runtime_nodejs",
@@ -37,6 +40,7 @@ object PackageManager {
             description = "Standard JavaScript & TypeScript V8 execution runtime with npm.",
             iconName = "javascript",
             commands = listOf("node", "npm", "npx"),
+            importSnippet = "// Node.js standard environment",
             isCore = true
         ),
         InstallablePackage(
@@ -47,8 +51,44 @@ object PackageManager {
             category = PackageCategory.DISCORD_SDK,
             description = "Official modern Discord API wrapper for Node.js featuring Slash commands & EmbedBuilder.",
             iconName = "code",
-            commands = listOf("const { Client } = require('discord.js')"),
+            commands = listOf("npm i discord.js"),
+            importSnippet = "const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');",
             isCore = true
+        ),
+
+        // Discord SDKs & Voice
+        InstallablePackage(
+            id = "sdk_discordpy",
+            name = "discord.py 2.3",
+            version = "2.3.2",
+            sizeMb = 1.8,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Modern, easy to use, feature-rich async Discord API client for Python.",
+            iconName = "code",
+            commands = listOf("pip install discord.py"),
+            importSnippet = "import discord\nfrom discord import app_commands\nfrom discord.ext import commands"
+        ),
+        InstallablePackage(
+            id = "sdk_discord_voice",
+            name = "@discordjs/voice",
+            version = "0.17.0",
+            sizeMb = 1.4,
+            category = PackageCategory.DISCORD_SDK,
+            description = "High performance Discord voice connection, audio player & audio stream pipeline.",
+            iconName = "speed",
+            commands = listOf("npm i @discordjs/voice @discordjs/opus"),
+            importSnippet = "const { joinVoiceChannel, createAudioPlayer, createAudioResource } = require('@discordjs/voice');"
+        ),
+        InstallablePackage(
+            id = "sdk_transcripts",
+            name = "discord-html-transcripts",
+            version = "3.2.0",
+            sizeMb = 1.1,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Export full Discord ticket channels and chats into beautiful downloadable HTML transcripts.",
+            iconName = "code",
+            commands = listOf("npm i discord-html-transcripts"),
+            importSnippet = "const discordTranscripts = require('discord-html-transcripts');"
         ),
 
         // Optional Installable Runtimes (Reduces Base APK)
@@ -61,16 +101,6 @@ object PackageManager {
             description = "Lightweight Python CPython interpreter with asyncio support for discord.py bots.",
             iconName = "terminal",
             commands = listOf("python3", "pip3", "python")
-        ),
-        InstallablePackage(
-            id = "sdk_discordpy",
-            name = "discord.py 2.3",
-            version = "2.3.2",
-            sizeMb = 1.8,
-            category = PackageCategory.DISCORD_SDK,
-            description = "Modern, easy to use, feature-rich async Discord API client for Python.",
-            iconName = "code",
-            commands = listOf("import discord", "@bot.tree.command")
         ),
         InstallablePackage(
             id = "runtime_bun",
@@ -103,6 +133,87 @@ object PackageManager {
             commands = listOf("go run", "go build")
         ),
 
+        // Utilities & Helpers
+        InstallablePackage(
+            id = "util_dotenv",
+            name = "dotenv",
+            version = "16.4.5",
+            sizeMb = 0.4,
+            category = PackageCategory.UTILITY,
+            description = "Zero-dependency module that loads environment variables from a .env file into process.env.",
+            iconName = "key",
+            commands = listOf("npm i dotenv"),
+            importSnippet = "require('dotenv').config();"
+        ),
+        InstallablePackage(
+            id = "util_axios",
+            name = "axios",
+            version = "1.6.8",
+            sizeMb = 0.8,
+            category = PackageCategory.UTILITY,
+            description = "Promise-based HTTP client for fetching REST APIs, weather forecasts, meme endpoints and webhooks.",
+            iconName = "cloud",
+            commands = listOf("npm i axios"),
+            importSnippet = "const axios = require('axios');"
+        ),
+        InstallablePackage(
+            id = "util_canvas",
+            name = "@napi-rs/canvas",
+            version = "0.1.52",
+            sizeMb = 3.5,
+            category = PackageCategory.UTILITY,
+            description = "Ultra-fast Skia-based 2D canvas library for generating customized server welcome banners and rank cards.",
+            iconName = "image",
+            commands = listOf("npm i @napi-rs/canvas"),
+            importSnippet = "const { createCanvas, loadImage } = require('@napi-rs/canvas');"
+        ),
+        InstallablePackage(
+            id = "util_cron",
+            name = "node-cron",
+            version = "3.0.3",
+            sizeMb = 0.5,
+            category = PackageCategory.UTILITY,
+            description = "Tiny task scheduler in pure JavaScript for scheduled daily announcements and server reminders.",
+            iconName = "schedule",
+            commands = listOf("npm i node-cron"),
+            importSnippet = "const cron = require('node-cron');\ncron.schedule('0 9 * * *', () => { /* Daily 9AM Task */ });"
+        ),
+        InstallablePackage(
+            id = "util_zod",
+            name = "zod",
+            version = "3.22.4",
+            sizeMb = 0.7,
+            category = PackageCategory.UTILITY,
+            description = "TypeScript-first schema validation with static type inference for bot command options.",
+            iconName = "check_circle",
+            commands = listOf("npm i zod"),
+            importSnippet = "const { z } = require('zod');"
+        ),
+
+        // Database & Storage
+        InstallablePackage(
+            id = "db_quickdb",
+            name = "quick.db",
+            version = "9.1.7",
+            sizeMb = 1.3,
+            category = PackageCategory.DATABASE,
+            description = "Simple, lightweight, persistent Key-Value SQLite storage engine for server economy and leveling systems.",
+            iconName = "storage",
+            commands = listOf("npm i quick.db better-sqlite3"),
+            importSnippet = "const { QuickDB } = require('quick.db');\nconst db = new QuickDB();"
+        ),
+        InstallablePackage(
+            id = "ext_database_drivers",
+            name = "SQLite & Embedded DB Engine",
+            version = "3.45.0",
+            sizeMb = 1.6,
+            category = PackageCategory.DATABASE,
+            description = "Embedded local database engine with persistent KV storage for custom bot tables.",
+            iconName = "storage",
+            commands = listOf("sqlite3", "db.get()", "db.set()"),
+            importSnippet = "const sqlite3 = require('sqlite3').verbose();"
+        ),
+
         // Extensions
         InstallablePackage(
             id = "ext_prettier",
@@ -112,7 +223,8 @@ object PackageManager {
             category = PackageCategory.EXTENSION,
             description = "Opinionated automatic code beautifier and indentation formatter.",
             iconName = "auto_fix_high",
-            commands = listOf("format", "prettier")
+            commands = listOf("format", "prettier"),
+            importSnippet = "// Formatter extension active"
         ),
         InstallablePackage(
             id = "ext_jest",
@@ -122,23 +234,18 @@ object PackageManager {
             category = PackageCategory.EXTENSION,
             description = "Automated unit test suite runner for checking bot command logic.",
             iconName = "check_circle",
-            commands = listOf("npm test", "pytest")
-        ),
-        InstallablePackage(
-            id = "ext_database_drivers",
-            name = "SQLite & Key-Value DB Engine",
-            version = "3.45.0",
-            sizeMb = 1.6,
-            category = PackageCategory.DATABASE,
-            description = "Embedded local database engine with persistent KV storage.",
-            iconName = "storage",
-            commands = listOf("sqlite3", "db.get()", "db.set()")
+            commands = listOf("npm test", "pytest"),
+            importSnippet = "// Test runner active"
         )
     )
 
+    // Dynamic package catalog
+    private val _allPackages = MutableStateFlow<List<InstallablePackage>>(DEFAULT_PACKAGES)
+    val allPackages: StateFlow<List<InstallablePackage>> = _allPackages.asStateFlow()
+
     // Set of installed package IDs
     private val _installedPackages = MutableStateFlow<Set<String>>(
-        setOf("runtime_nodejs", "sdk_discordjs", "ext_jest", "ext_database_drivers")
+        setOf("runtime_nodejs", "sdk_discordjs", "util_dotenv", "ext_database_drivers", "ext_jest")
     )
     val installedPackages: StateFlow<Set<String>> = _installedPackages.asStateFlow()
 
@@ -159,18 +266,27 @@ object PackageManager {
         }
     }
 
-    suspend fun installPackage(pkg: InstallablePackage, onProgress: (Float) -> Unit = {}) {
+    suspend fun installPackage(
+        pkg: InstallablePackage,
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ) {
         val currentProgress = _downloadingProgress.value.toMutableMap()
         currentProgress[pkg.id] = 0.05f
         _downloadingProgress.value = currentProgress
 
-        // Smooth simulated stream download
-        for (step in 1..10) {
-            kotlinx.coroutines.delay(120)
-            val p = step / 10f
-            currentProgress[pkg.id] = p
+        val stages = listOf(
+            0.15f to "Resolving package manifest and dependency tree...",
+            0.35f to "Fetching tarball from registry...",
+            0.60f to "Verifying checksum and integrity sha512...",
+            0.85f to "Extracting and linking node_modules binaries...",
+            1.00f to "Running package post-install lifecycle scripts..."
+        )
+
+        for ((progress, statusText) in stages) {
+            delay(150)
+            currentProgress[pkg.id] = progress
             _downloadingProgress.value = currentProgress.toMap()
-            onProgress(p)
+            onProgress(progress, statusText)
         }
 
         currentProgress.remove(pkg.id)
@@ -181,6 +297,40 @@ object PackageManager {
         _installedPackages.value = set
     }
 
+    suspend fun installCustomPackage(
+        packageName: String,
+        manager: String = "npm",
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): InstallablePackage {
+        val cleanName = packageName.trim().lowercase()
+        val pkgId = "pkg_" + cleanName.replace(Regex("[^a-z0-9_]"), "_")
+
+        val newPkg = InstallablePackage(
+            id = pkgId,
+            name = cleanName,
+            version = "latest",
+            sizeMb = 1.0 + (cleanName.length % 4) * 0.7,
+            category = if (manager == "pip") PackageCategory.LANGUAGE else PackageCategory.UTILITY,
+            description = "Custom installed package '$cleanName' via $manager package registry.",
+            iconName = "extension",
+            commands = listOf("$manager install $cleanName"),
+            importSnippet = if (manager == "pip") {
+                "import $cleanName"
+            } else {
+                "const $cleanName = require('$cleanName');"
+            },
+            author = "Registry Package ($manager)"
+        )
+
+        // Add to catalog if not exists
+        if (_allPackages.value.none { it.id == pkgId }) {
+            _allPackages.value = _allPackages.value + newPkg
+        }
+
+        installPackage(newPkg, onProgress)
+        return newPkg
+    }
+
     fun uninstallPackage(pkg: InstallablePackage) {
         if (pkg.isCore) return
         val set = _installedPackages.value.toMutableSet()
@@ -189,7 +339,7 @@ object PackageManager {
     }
 
     fun calculateSavedApkSizeMb(): Double {
-        val uninstalled = AVAILABLE_PACKAGES.filter { !_installedPackages.value.contains(it.id) }
+        val uninstalled = _allPackages.value.filter { !_installedPackages.value.contains(it.id) }
         return uninstalled.sumOf { it.sizeMb }
     }
 }

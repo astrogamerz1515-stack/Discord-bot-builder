@@ -1,7 +1,12 @@
 package com.example.ui.storage
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,12 +20,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DataArray
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -63,23 +78,41 @@ import com.example.ui.theme.DiscordTextMuted
 import com.example.ui.theme.DiscordTextPrimary
 import com.example.ui.theme.DiscordTextSecondary
 import com.example.ui.theme.DiscordYellow
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Composable
 fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
+    val context = LocalContext.current
     val project by viewModel.currentProject.collectAsState()
     val storageList by viewModel.storageEntries.collectAsState()
 
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedFilterType by remember { mutableStateOf("ALL") }
+
     var showAddDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
+
     var keyInput by remember { mutableStateOf("") }
     var valueInput by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf("STRING") }
     var typeDropdownOpen by remember { mutableStateOf(false) }
 
+    val filteredList = storageList.filter { item ->
+        val matchesQuery = searchQuery.isBlank() ||
+                item.storageKey.contains(searchQuery, ignoreCase = true) ||
+                item.storageValue.contains(searchQuery, ignoreCase = true)
+        val matchesType = selectedFilterType == "ALL" || item.valueType == selectedFilterType
+        matchesQuery && matchesType
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DiscordBackground)
-            .padding(16.dp)
+            .padding(14.dp)
     ) {
         // Header
         Row(
@@ -97,63 +130,124 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Advanced Bot Storage",
+                        text = "Storage & Database Manager",
                         color = DiscordTextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
-                    text = "Room-backed Key-Value & JSON datastore for ${project?.name ?: "bot"}",
+                    text = "${storageList.size} keys • Room SQLite backed datastore for ${project?.name ?: "bot"}",
                     color = DiscordTextSecondary,
                     fontSize = 12.sp
                 )
             }
 
-            Button(
-                onClick = { showAddDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.testTag("btn_add_storage_entry")
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("New Key", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Export JSON
+                IconButton(
+                    onClick = { showExportDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = "Export", tint = DiscordTextSecondary, modifier = Modifier.size(18.dp))
+                }
+
+                // Import JSON
+                IconButton(
+                    onClick = { showImportDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.Upload, contentDescription = "Import", tint = DiscordTextSecondary, modifier = Modifier.size(18.dp))
+                }
+
+                // Add Key Button
+                Button(
+                    onClick = { showAddDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .height(32.dp)
+                        .testTag("btn_add_storage_entry")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Key", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Info Banner with Code Usage
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
+        // Search & Filter Bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = "💡 SDK Access Code Snippet",
-                    color = DiscordTextPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "// Store and retrieve persistent bot state\n" +
-                            "const val = await db.get('prefix'); // or bot_storage.get('key')\n" +
-                            "await db.set('guild_102_welcome', { enabled: true, channel: '109283' });",
-                    color = DiscordGreen,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp
-                )
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Filter keys or values...", color = DiscordTextMuted, fontSize = 12.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = DiscordTextSecondary, modifier = Modifier.size(16.dp)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = DiscordBlurple,
+                    unfocusedBorderColor = DiscordHover,
+                    focusedTextColor = DiscordTextPrimary,
+                    unfocusedTextColor = DiscordTextPrimary,
+                    focusedContainerColor = DiscordDarker,
+                    unfocusedContainerColor = DiscordDarker
+                ),
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp),
+                shape = RoundedCornerShape(6.dp)
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Clear all button if has entries
+            if (storageList.isNotEmpty()) {
+                IconButton(
+                    onClick = { showClearConfirmDialog = true },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Default.CleaningServices, contentDescription = "Clear All", tint = DiscordRed, modifier = Modifier.size(18.dp))
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Type Filter Chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf("ALL", "STRING", "JSON", "NUMBER", "BOOLEAN").forEach { type ->
+                val isSelected = selectedFilterType == type
+                Surface(
+                    color = if (isSelected) DiscordBlurple else DiscordSurface,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.clickable { selectedFilterType = type }
+                ) {
+                    Text(
+                        text = type,
+                        color = if (isSelected) Color.White else DiscordTextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Storage Entries List
-        if (storageList.isEmpty()) {
+        if (filteredList.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -165,19 +259,19 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                         imageVector = Icons.Default.Storage,
                         contentDescription = null,
                         tint = DiscordTextMuted,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(42.dp)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "No storage keys created yet",
+                        text = if (searchQuery.isNotBlank()) "No matching keys found" else "No storage keys created yet",
                         color = DiscordTextSecondary,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Tap 'New Key' to save persistent variables, guild configs, or JSON documents.",
+                        text = "Use '+ New Key' or import JSON to persist server configs, economy balances, or level XP.",
                         color = DiscordTextMuted,
-                        fontSize = 12.sp
+                        fontSize = 11.sp
                     )
                 }
             }
@@ -186,19 +280,24 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(storageList, key = { it.id }) { item ->
+                items(filteredList, key = { it.id }) { item ->
                     StorageItemCard(
                         item = item,
-                        onDelete = { viewModel.deleteStorageEntry(item.id) }
+                        onDelete = { viewModel.deleteStorageEntry(item.id) },
+                        onCopy = {
+                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cb.setPrimaryClip(ClipData.newPlainText("Key Value", item.storageValue))
+                            Toast.makeText(context, "Copied value for ${item.storageKey}", Toast.LENGTH_SHORT).show()
+                        }
                     )
                 }
             }
         }
     }
 
-    // Add Key-Value Dialog
+    // Add Key Dialog
     if (showAddDialog) {
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
@@ -207,11 +306,11 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                 Text("Add Storage Key", color = DiscordTextPrimary, fontWeight = FontWeight.Bold)
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = keyInput,
                         onValueChange = { keyInput = it },
-                        label = { Text("Key Name (e.g. guild_settings, xp_table)") },
+                        label = { Text("Key Name (e.g. guild_settings, user_xp)") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = DiscordBlurple,
                             unfocusedBorderColor = DiscordHover,
@@ -222,7 +321,6 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Type Picker
                     Box {
                         Surface(
                             color = DiscordDarker,
@@ -237,7 +335,7 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Type: $selectedType", color = DiscordTextPrimary, fontSize = 13.sp)
+                                Text("Data Type: $selectedType", color = DiscordTextPrimary, fontSize = 13.sp)
                                 Text("▼", color = DiscordTextSecondary, fontSize = 10.sp)
                             }
                         }
@@ -262,7 +360,7 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                     OutlinedTextField(
                         value = valueInput,
                         onValueChange = { valueInput = it },
-                        label = { Text(if (selectedType == "JSON") "JSON Object / Array" else "Value") },
+                        label = { Text(if (selectedType == "JSON") "JSON Payload" else "Stored Value") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = DiscordBlurple,
                             unfocusedBorderColor = DiscordHover,
@@ -282,11 +380,12 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
                             keyInput = ""
                             valueInput = ""
                             showAddDialog = false
+                            Toast.makeText(context, "Saved key into datastore", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
                 ) {
-                    Text("Save")
+                    Text("Save Entry")
                 }
             },
             dismissButton = {
@@ -296,10 +395,167 @@ fun AdvancedStorageScreen(viewModel: BotStudioViewModel) {
             }
         )
     }
+
+    // Export Dialog
+    if (showExportDialog) {
+        val exportJson = remember(storageList) {
+            val root = JSONObject()
+            storageList.forEach {
+                val sub = JSONObject()
+                sub.put("value", it.storageValue)
+                sub.put("type", it.valueType)
+                root.put(it.storageKey, sub)
+            }
+            root.toString(2)
+        }
+
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            containerColor = DiscordSurface,
+            title = { Text("Export Storage JSON", color = DiscordTextPrimary) },
+            text = {
+                Column {
+                    Text(
+                        text = "Full snapshot of your bot's persistent database (${storageList.size} keys):",
+                        color = DiscordTextSecondary,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DiscordDarker),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                    ) {
+                        LazyColumn(modifier = Modifier.padding(8.dp)) {
+                            item {
+                                Text(text = exportJson, color = DiscordGreen, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cb.setPrimaryClip(ClipData.newPlainText("Exported Storage", exportJson))
+                        showExportDialog = false
+                        Toast.makeText(context, "Storage JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
+                ) {
+                    Text("Copy JSON")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) {
+                    Text("Close", color = DiscordTextMuted)
+                }
+            }
+        )
+    }
+
+    // Import Dialog
+    if (showImportDialog) {
+        var importInput by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            containerColor = DiscordSurface,
+            title = { Text("Import Database Keys", color = DiscordTextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Paste a JSON object with key-value pairs to batch insert into Room:",
+                        color = DiscordTextSecondary,
+                        fontSize = 12.sp
+                    )
+                    OutlinedTextField(
+                        value = importInput,
+                        onValueChange = { importInput = it },
+                        placeholder = { Text("{\n  \"welcome_msg\": \"Hello!\",\n  \"starting_balance\": 500\n}", color = DiscordTextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DiscordTextPrimary,
+                            unfocusedTextColor = DiscordTextPrimary,
+                            focusedBorderColor = DiscordBlurple
+                        ),
+                        minLines = 5,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        try {
+                            val json = JSONObject(importInput)
+                            var imported = 0
+                            val keys = json.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                val raw = json.get(k)
+                                val (valStr, typeStr) = when (raw) {
+                                    is JSONObject -> raw.optString("value", raw.toString()) to raw.optString("type", "JSON")
+                                    is Number -> raw.toString() to "NUMBER"
+                                    is Boolean -> raw.toString() to "BOOLEAN"
+                                    else -> raw.toString() to "STRING"
+                                }
+                                viewModel.addStorageEntry(k, valStr, typeStr)
+                                imported++
+                            }
+                            showImportDialog = false
+                            Toast.makeText(context, "Imported $imported keys successfully", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Invalid JSON: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
+                ) {
+                    Text("Import Keys")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text("Cancel", color = DiscordTextMuted)
+                }
+            }
+        )
+    }
+
+    // Clear confirmation dialog
+    if (showClearConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            containerColor = DiscordSurface,
+            title = { Text("Clear All Storage?", color = DiscordRed, fontWeight = FontWeight.Bold) },
+            text = {
+                Text("This will permanently delete all ${storageList.size} stored keys and variables for this bot.", color = DiscordTextPrimary)
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearStorage()
+                        showClearConfirmDialog = false
+                        Toast.makeText(context, "Database cleared", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordRed)
+                ) {
+                    Text("Delete All")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Cancel", color = DiscordTextMuted)
+                }
+            }
+        )
+    }
 }
 
 @Composable
-fun StorageItemCard(item: BotKeyValue, onDelete: () -> Unit) {
+fun StorageItemCard(item: BotKeyValue, onDelete: () -> Unit, onCopy: () -> Unit = {}) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DiscordDarker),
         shape = RoundedCornerShape(8.dp),
@@ -308,7 +564,7 @@ fun StorageItemCard(item: BotKeyValue, onDelete: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -317,7 +573,7 @@ fun StorageItemCard(item: BotKeyValue, onDelete: () -> Unit) {
                     Text(
                         text = item.storageKey,
                         color = DiscordTextPrimary,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
                     )
@@ -350,18 +606,29 @@ fun StorageItemCard(item: BotKeyValue, onDelete: () -> Unit) {
                     text = item.storageValue,
                     color = DiscordTextSecondary,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     maxLines = 3
                 )
             }
 
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = DiscordRed,
-                    modifier = Modifier.size(18.dp)
-                )
+            Row {
+                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy",
+                        tint = DiscordTextSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = DiscordRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }

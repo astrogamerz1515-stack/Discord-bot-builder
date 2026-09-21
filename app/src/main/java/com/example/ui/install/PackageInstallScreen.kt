@@ -1,5 +1,6 @@
 package com.example.ui.install
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -17,29 +18,34 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,9 +58,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.packages.InstallablePackage
@@ -77,16 +86,30 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun PackageInstallScreen(viewModel: BotStudioViewModel) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val allPackages by PackageManager.allPackages.collectAsState()
     val installedSet by PackageManager.installedPackages.collectAsState()
     val downloadingProgress by PackageManager.downloadingProgress.collectAsState()
-    val coroutineScope = rememberCoroutineScope()
 
+    var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<PackageCategory?>(null) }
-    val savedSizeMb = remember(installedSet) { PackageManager.calculateSavedApkSizeMb() }
+    val savedSizeMb = remember(installedSet, allPackages) { PackageManager.calculateSavedApkSizeMb() }
 
-    val filteredPackages = remember(selectedCategory) {
-        if (selectedCategory == null) PackageManager.AVAILABLE_PACKAGES
-        else PackageManager.AVAILABLE_PACKAGES.filter { it.category == selectedCategory }
+    // Custom package input states
+    var customPkgName by remember { mutableStateOf("") }
+    var selectedManager by remember { mutableStateOf("npm") }
+    var isInstallingCustom by remember { mutableStateOf(false) }
+
+    val filteredPackages = remember(allPackages, selectedCategory, searchQuery) {
+        allPackages.filter { pkg ->
+            val matchesCategory = selectedCategory == null || pkg.category == selectedCategory
+            val matchesQuery = searchQuery.isBlank() ||
+                    pkg.name.contains(searchQuery, ignoreCase = true) ||
+                    pkg.description.contains(searchQuery, ignoreCase = true) ||
+                    pkg.commands.any { it.contains(searchQuery, ignoreCase = true) }
+            matchesCategory && matchesQuery
+        }
     }
 
     Column(
@@ -95,7 +118,7 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
             .background(DiscordBackground)
             .padding(14.dp)
     ) {
-        // Header
+        // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -111,14 +134,14 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Extensions & Language Hub",
+                        text = "Packages & Runtime Hub",
                         color = DiscordTextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
-                    text = "Modular on-demand runtimes to keep base APK slim and lightning fast",
+                    text = "Fast package installer with 1-click import into code editor",
                     color = DiscordTextSecondary,
                     fontSize = 12.sp
                 )
@@ -149,7 +172,171 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Custom Quick Installer Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⚡ Install Any Package",
+                        color = DiscordTextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    // Manager switcher chips
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("npm", "pip", "bun").forEach { mgr ->
+                            val isSelected = selectedManager == mgr
+                            Surface(
+                                color = if (isSelected) DiscordBlurple else DiscordElevated,
+                                shape = RoundedCornerShape(4.dp),
+                                modifier = Modifier.clickable { selectedManager = mgr }
+                            ) {
+                                Text(
+                                    text = mgr,
+                                    color = if (isSelected) Color.White else DiscordTextSecondary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = customPkgName,
+                        onValueChange = { customPkgName = it },
+                        placeholder = {
+                            Text(
+                                if (selectedManager == "pip") "e.g. discord.py, requests..." else "e.g. chalk, express, moment...",
+                                color = DiscordTextMuted,
+                                fontSize = 12.sp
+                            )
+                        },
+                        textStyle = TextStyle(
+                            color = DiscordTextPrimary,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            if (customPkgName.isNotBlank() && !isInstallingCustom) {
+                                isInstallingCustom = true
+                                coroutineScope.launch {
+                                    val installed = PackageManager.installCustomPackage(
+                                        customPkgName,
+                                        selectedManager
+                                    )
+                                    viewModel.executeQuickTerminalCommand("$selectedManager install ${installed.name}")
+                                    Toast.makeText(context, "Installed ${installed.name} successfully!", Toast.LENGTH_SHORT).show()
+                                    customPkgName = ""
+                                    isInstallingCustom = false
+                                }
+                            }
+                        }),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = DiscordBlurple,
+                            unfocusedBorderColor = DiscordHover,
+                            focusedContainerColor = DiscordBackground,
+                            unfocusedContainerColor = DiscordBackground
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("input_custom_package")
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            if (customPkgName.isNotBlank() && !isInstallingCustom) {
+                                isInstallingCustom = true
+                                coroutineScope.launch {
+                                    val installed = PackageManager.installCustomPackage(
+                                        customPkgName,
+                                        selectedManager
+                                    )
+                                    viewModel.executeQuickTerminalCommand("$selectedManager install ${installed.name}")
+                                    Toast.makeText(context, "Installed ${installed.name} successfully!", Toast.LENGTH_SHORT).show()
+                                    customPkgName = ""
+                                    isInstallingCustom = false
+                                }
+                            }
+                        },
+                        enabled = customPkgName.isNotBlank() && !isInstallingCustom,
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .testTag("btn_install_custom_pkg")
+                    ) {
+                        if (isInstallingCustom) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = "Add", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Install", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Live Search Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search packages, SDKs, database drivers...", color = DiscordTextMuted, fontSize = 12.sp) },
+            leadingIcon = {
+                Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = DiscordTextMuted, modifier = Modifier.size(18.dp))
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Clear", tint = DiscordTextMuted, modifier = Modifier.size(16.dp))
+                    }
+                }
+            },
+            singleLine = true,
+            textStyle = TextStyle(color = DiscordTextPrimary, fontSize = 12.sp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = DiscordBlurple,
+                unfocusedBorderColor = DiscordElevated,
+                focusedContainerColor = DiscordDarker,
+                unfocusedContainerColor = DiscordDarker
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .testTag("search_package_input")
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Category Filter Chips
         Row(
@@ -167,11 +354,11 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                     .testTag("filter_all")
             ) {
                 Text(
-                    text = "All Packages (${PackageManager.AVAILABLE_PACKAGES.size})",
+                    text = "All (${allPackages.size})",
                     color = if (allSelected) Color.White else DiscordTextPrimary,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = if (allSelected) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
 
@@ -187,15 +374,15 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                     Text(
                         text = cat.label,
                         color = if (isSelected) Color.White else DiscordTextPrimary,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Package Cards List
         LazyColumn(
@@ -204,7 +391,7 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                 .weight(1f),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(filteredPackages) { pkg ->
+            items(filteredPackages, key = { it.id }) { pkg ->
                 val isInstalled = installedSet.contains(pkg.id)
                 val progress = downloadingProgress[pkg.id]
 
@@ -228,13 +415,14 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                                 Surface(
                                     color = if (isInstalled) DiscordGreen.copy(alpha = 0.2f) else DiscordElevated,
                                     shape = RoundedCornerShape(6.dp),
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(38.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = when (pkg.category) {
                                                 PackageCategory.LANGUAGE -> Icons.Default.Terminal
-                                                PackageCategory.DISCORD_SDK -> Icons.Default.Speed
+                                                PackageCategory.DISCORD_SDK -> Icons.Default.Code
+                                                PackageCategory.UTILITY -> Icons.Default.AutoFixHigh
                                                 PackageCategory.EXTENSION -> Icons.Default.Extension
                                                 PackageCategory.DATABASE -> Icons.Default.Storage
                                             },
@@ -264,14 +452,14 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                                         )
                                     }
                                     Text(
-                                        text = "${pkg.category.label} • %.1f MB".format(pkg.sizeMb),
+                                        text = "${pkg.category.label} • %.1f MB • ${pkg.author}".format(pkg.sizeMb),
                                         color = DiscordTextSecondary,
                                         fontSize = 11.sp
                                     )
                                 }
                             }
 
-                            // Action Button (Install / Uninstall / Installed)
+                            // Action Button (Install / Uninstall / Installed badge)
                             if (progress != null) {
                                 Surface(
                                     color = DiscordBlurple.copy(alpha = 0.2f),
@@ -314,7 +502,10 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                                     if (!pkg.isCore) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         IconButton(
-                                            onClick = { PackageManager.uninstallPackage(pkg) },
+                                            onClick = {
+                                                PackageManager.uninstallPackage(pkg)
+                                                viewModel.executeQuickTerminalCommand("npm uninstall ${pkg.name}")
+                                            },
                                             modifier = Modifier.size(28.dp)
                                         ) {
                                             Icon(
@@ -330,7 +521,11 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                                 Button(
                                     onClick = {
                                         coroutineScope.launch {
-                                            PackageManager.installPackage(pkg)
+                                            PackageManager.installPackage(pkg) { _, status ->
+                                                // Live feedback
+                                            }
+                                            viewModel.executeQuickTerminalCommand("npm install ${pkg.name}")
+                                            Toast.makeText(context, "Installed ${pkg.name} successfully!", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
@@ -375,26 +570,66 @@ fun PackageInstallScreen(viewModel: BotStudioViewModel) {
                             )
                         }
 
-                        // Terminal commands provided
-                        Spacer(modifier = Modifier.height(6.dp))
+                        // Terminal commands & Insert Code button
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            pkg.commands.forEach { cmd ->
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                pkg.commands.forEach { cmd ->
+                                    Surface(
+                                        color = DiscordDarker,
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            text = cmd,
+                                            color = DiscordTextSecondary,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 1-Click Code Injection button for installed packages with import snippets
+                            if (isInstalled && pkg.importSnippet.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
-                                    color = DiscordDarker,
-                                    shape = RoundedCornerShape(4.dp)
+                                    color = DiscordBlurple.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    modifier = Modifier
+                                        .clickable {
+                                            viewModel.insertPackageImport(pkg.importSnippet)
+                                            Toast.makeText(context, "Added import to active editor file!", Toast.LENGTH_SHORT).show()
+                                        }
+                                        .testTag("btn_insert_import_${pkg.id}")
                                 ) {
-                                    Text(
-                                        text = cmd,
-                                        color = DiscordTextSecondary,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Code,
+                                            contentDescription = "Insert import",
+                                            tint = DiscordBlurple,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Insert Import",
+                                            color = DiscordBlurple,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }

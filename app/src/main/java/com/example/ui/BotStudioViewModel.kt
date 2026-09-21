@@ -11,20 +11,28 @@ import com.example.data.model.SavedEmbed
 import com.example.data.model.TerminalLog
 import com.example.data.repository.BotRepository
 import com.example.engine.BotRuntimeEngine
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class AppTab(val title: String, val iconName: String) {
     EDITOR("Editor", "code"),
     TERMINAL("Terminal", "terminal"),
     SIMULATOR("Discord Simulator", "chat"),
     EMBED_BUILDER("Embed Designer", "dashboard_customize"),
-    STORAGE("Database KV", "storage"),
-    AI_ASSISTANT("AI Assistant", "auto_awesome"),
+    STORAGE("Storage Manager", "storage"),
+    EXTENSIONS("Extensions", "extension"),
+    GRADLE("Gradle", "build"),
+    AI_ASSISTANT("AI Studio", "auto_awesome"),
+    API_KEYS("AI Models & Keys", "key"),
     PACKAGES("Install", "extension"),
     BOT_CONFIG("Bot Config", "settings"),
     DEPLOY("Deploy", "cloud_upload")
@@ -72,7 +80,17 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     val terminalInput: StateFlow<String> = _terminalInput.asStateFlow()
 
     private val _commandHistory = MutableStateFlow<List<String>>(emptyList())
+    val commandHistory: StateFlow<List<String>> = _commandHistory.asStateFlow()
     private var historyIndex = -1
+
+    // Autosave State
+    private val _autoSaveEnabled = MutableStateFlow(true)
+    val autoSaveEnabled: StateFlow<Boolean> = _autoSaveEnabled.asStateFlow()
+
+    private val _saveStatus = MutableStateFlow("Saved")
+    val saveStatus: StateFlow<String> = _saveStatus.asStateFlow()
+
+    private var autoSaveJob: Job? = null
 
     // Storage State
     private val _storageEntries = MutableStateFlow<List<com.example.data.model.BotKeyValue>>(emptyList())
@@ -165,7 +183,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         // Observe terminal logs for this project
         viewModelScope.launch {
             repository.getTerminalLogs(project.id).collect { logs ->
-                _terminalLogs.value = logs
+                val maxLimit = com.example.engine.SystemDeviceOptimizer.settings.value.maxLogBufferSize
+                _terminalLogs.value = if (logs.size > maxLimit) logs.takeLast(maxLimit) else logs
             }
         }
 
@@ -188,6 +207,26 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun updateActiveFileContent(newContent: String) {
         _activeFileContent.value = newContent
         _activeFile.value?.let { runDiagnostics(newContent, it.filePath) }
+
+        if (_autoSaveEnabled.value) {
+            _saveStatus.value = "Saving..."
+            autoSaveJob?.cancel()
+            autoSaveJob = viewModelScope.launch {
+                delay(1200) // 1.2s debounce for responsive smooth typing
+                saveActiveFile()
+            }
+        } else {
+            _saveStatus.value = "Unsaved changes"
+        }
+    }
+
+    fun toggleAutoSave(enabled: Boolean) {
+        _autoSaveEnabled.value = enabled
+        if (enabled) {
+            saveActiveFile()
+        } else {
+            _saveStatus.value = "Auto-save paused"
+        }
     }
 
     fun runDiagnostics(code: String, filePath: String) {
@@ -221,10 +260,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveActiveFile() {
         val file = _activeFile.value ?: return
         val currentContent = _activeFileContent.value
-        if (file.content != currentContent) {
-            viewModelScope.launch {
-                repository.saveFile(file.copy(content = currentContent))
-            }
+        viewModelScope.launch {
+            val updatedFile = file.copy(content = currentContent)
+            repository.saveFile(updatedFile)
+            _activeFile.value = updatedFile
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            _saveStatus.value = "Saved at $timeStr"
         }
     }
 
@@ -344,6 +385,36 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.clearTerminalLogs(project.id)
         }
+    }
+
+    fun navigateCommandHistory(up: Boolean) {
+        val history = _commandHistory.value
+        if (history.isEmpty()) return
+        if (up) {
+            if (historyIndex > 0) {
+                historyIndex--
+                _terminalInput.value = history[historyIndex]
+            } else if (historyIndex == 0) {
+                _terminalInput.value = history[0]
+            } else {
+                historyIndex = history.size - 1
+                _terminalInput.value = history[historyIndex]
+            }
+        } else {
+            if (historyIndex < history.size - 1) {
+                historyIndex++
+                _terminalInput.value = history[historyIndex]
+            } else {
+                historyIndex = history.size
+                _terminalInput.value = ""
+            }
+        }
+    }
+
+    fun insertPackageImport(importStatement: String) {
+        val current = _activeFileContent.value
+        _activeFileContent.value = importStatement.trim() + "\n" + current
+        saveActiveFile()
     }
 
     fun insertTextAtCursor(text: String) {

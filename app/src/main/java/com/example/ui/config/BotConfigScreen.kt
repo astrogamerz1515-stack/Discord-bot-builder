@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
@@ -182,6 +184,173 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                 Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Save", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+
+        // Quick Navigation to AI Models & Keys Pool
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { viewModel.setTab(com.example.ui.AppTab.API_KEYS) }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Key,
+                        contentDescription = "Keys",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "AI Models & API Key Pool",
+                            color = DiscordTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "Configure Gemini, OpenAI, Claude, Groq & auto-failover on quota limits",
+                            color = DiscordTextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                Surface(
+                    color = DiscordElevated,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = "Manage →",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        // Open Collaboration & Permissions Freedom Card
+        var unrestrictedAccessEnabled by remember { mutableStateOf(true) }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Access",
+                            tint = DiscordGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Access & Permission Freedom",
+                                color = DiscordTextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = "Anyone can read, edit & manage codes and Gradle freely",
+                                color = DiscordTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Surface(
+                        color = DiscordGreen.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "UNRESTRICTED",
+                            color = DiscordGreen,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DiscordDarker, RoundedCornerShape(6.dp))
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Public Access to Codes & Gradle",
+                            color = DiscordTextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "Unrestricted public access is active. Anyone can edit bot code, create files, manage packages, and edit Gradle scripts without permission barriers.",
+                            color = DiscordTextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Switch(
+                        checked = unrestrictedAccessEnabled,
+                        onCheckedChange = {
+                            unrestrictedAccessEnabled = it
+                            Toast.makeText(context, if (it) "Unrestricted access enabled: Anyone can edit codes & Gradle!" else "Public access restricted", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = DiscordGreen
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { viewModel.setTab(com.example.ui.AppTab.EDITOR) },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f).height(36.dp)
+                    ) {
+                        Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(14.dp), tint = DiscordTextPrimary)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Edit Bot Codes", color = DiscordTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Button(
+                        onClick = { viewModel.setTab(com.example.ui.AppTab.GRADLE) },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f).height(36.dp)
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(14.dp), tint = DiscordBlurple)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Manage Gradle", color = DiscordTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
 
