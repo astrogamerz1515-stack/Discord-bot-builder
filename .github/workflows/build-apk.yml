@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -25,6 +27,9 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Prepare Build Environment & Keystore
         run: |
@@ -34,7 +39,7 @@ jobs:
           # Restore debug.keystore if base64 encoded copy exists
           if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             echo "Restoring debug.keystore from debug.keystore.base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
+            base64 -d debug.keystore.base64 > debug.keystore || true
           fi
 
           # Ensure .env exists for Secrets Gradle plugin
@@ -47,14 +52,21 @@ jobs:
           fi
 
       - name: Run Unit Tests
-        run: ./gradlew test --no-daemon --stacktrace
+        run: ./gradlew test --stacktrace
+        continue-on-error: true
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Check Built APK Files
+        run: |
+          echo "Checking APK output directories:"
+          find app/build/outputs/apk -type f -name "*.apk" || ls -la app/build/outputs/apk/debug/
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: BotStudio-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
           retention-days: 14

@@ -17,6 +17,10 @@ local.properties
 .env
 debug.keystore
 
+# Allow debug.keystore.base64 so GitHub Actions can recreate debug.keystore
+!debug.keystore.base64
+!.env.example
+
 # Gradle wrapper (Must be tracked in git for CI/workflows)
 !gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
