@@ -24,11 +24,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
@@ -257,7 +257,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                 val icon = when (tab) {
                                     AppTab.EDITOR -> Icons.Default.Code
                                     AppTab.TERMINAL -> Icons.Default.Terminal
-                                    AppTab.SIMULATOR -> Icons.Default.Chat
+                                    AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat
                                     AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize
                                     AppTab.STORAGE -> Icons.Default.Storage
                                     AppTab.EXTENSIONS -> Icons.Default.Extension
@@ -310,7 +310,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                     val (icon, label) = when (tab) {
                         AppTab.EDITOR -> Icons.Default.Code to "Editor"
                         AppTab.TERMINAL -> Icons.Default.Terminal to "Terminal"
-                        AppTab.SIMULATOR -> Icons.Default.Chat to "Simulator"
+                        AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat to "Simulator"
                         AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize to "Embeds"
                         AppTab.STORAGE -> Icons.Default.Storage to "Storage"
                         AppTab.EXTENSIONS -> Icons.Default.Extension to "Extensions"

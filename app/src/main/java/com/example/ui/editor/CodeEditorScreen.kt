@@ -22,9 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Code
@@ -432,7 +432,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier.clickable { moveCursor(-1) }
             ) {
                 Icon(
-                    imageVector = Icons.Default.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Cursor Left",
                     tint = DiscordTextPrimary,
                     modifier = Modifier
@@ -447,7 +447,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier.clickable { moveCursor(1) }
             ) {
                 Icon(
-                    imageVector = Icons.Default.ArrowForward,
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = "Cursor Right",
                     tint = DiscordTextPrimary,
                     modifier = Modifier

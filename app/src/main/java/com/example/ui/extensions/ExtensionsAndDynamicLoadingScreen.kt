@@ -363,7 +363,7 @@ fun DynamicModuleCard(
             if (module.status == DynamicModuleStatus.DOWNLOADING || module.status == DynamicModuleStatus.LOADING) {
                 Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
-                    progress = module.progress,
+                    progress = { module.progress },
                     color = DiscordBlurple,
                     trackColor = DiscordDarker,
                     modifier = Modifier
