@@ -38,6 +38,8 @@ android {
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
+      } else {
+        initWith(getByName("debug"))
       }
     }
   }
