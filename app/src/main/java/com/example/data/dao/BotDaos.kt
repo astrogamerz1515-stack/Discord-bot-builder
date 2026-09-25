@@ -41,6 +41,9 @@ interface BotFileDao {
     @Query("SELECT * FROM bot_files WHERE projectId = :projectId ORDER BY isEntrypoint DESC, filePath ASC")
     fun getFilesForProject(projectId: Long): Flow<List<BotFile>>
 
+    @Query("SELECT * FROM bot_files WHERE projectId = :projectId ORDER BY isEntrypoint DESC, filePath ASC")
+    suspend fun getFilesForProjectDirect(projectId: Long): List<BotFile>
+
     @Query("SELECT * FROM bot_files WHERE projectId = :projectId AND filePath = :filePath LIMIT 1")
     suspend fun getFileByPath(projectId: Long, filePath: String): BotFile?
 

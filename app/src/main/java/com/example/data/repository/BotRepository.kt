@@ -27,6 +27,8 @@ class BotRepository(
 
     fun getFiles(projectId: Long): Flow<List<BotFile>> = fileDao.getFilesForProject(projectId)
 
+    suspend fun getFilesDirect(projectId: Long): List<BotFile> = fileDao.getFilesForProjectDirect(projectId)
+
     suspend fun getFileById(fileId: Long): BotFile? = fileDao.getFileById(fileId)
 
     fun getTerminalLogs(projectId: Long): Flow<List<TerminalLog>> = logDao.getLogsForProject(projectId)

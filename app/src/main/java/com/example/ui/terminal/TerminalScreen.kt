@@ -172,10 +172,8 @@ fun TerminalScreen(viewModel: BotStudioViewModel) {
                     ) {
                         Button(
                             onClick = {
-                                project?.let {
-                                    if (isRunning) viewModel.runtimeEngine.stopBot(it.id)
-                                    else viewModel.runtimeEngine.startBot(it)
-                                }
+                                if (isRunning) viewModel.stopBotProcess()
+                                else viewModel.startBotProcess()
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isRunning) DiscordRed else DiscordGreen
@@ -203,7 +201,7 @@ fun TerminalScreen(viewModel: BotStudioViewModel) {
 
                         if (isRunning) {
                             IconButton(
-                                onClick = { project?.let { viewModel.runtimeEngine.restartBot(it) } },
+                                onClick = { viewModel.restartBotProcess() },
                                 modifier = Modifier
                                     .size(30.dp)
                                     .background(DiscordElevated, RoundedCornerShape(6.dp))

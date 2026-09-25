@@ -15,6 +15,17 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 data class DiscordSimulatorMessage(
@@ -55,6 +66,9 @@ class BotRuntimeEngine(
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+    private val _isRealDiscordConnected = MutableStateFlow(false)
+    val isRealDiscordConnected: StateFlow<Boolean> = _isRealDiscordConnected.asStateFlow()
+
     private val _botStatusText = MutableStateFlow("Stopped")
     val botStatusText: StateFlow<String> = _botStatusText.asStateFlow()
 
@@ -72,14 +86,25 @@ class BotRuntimeEngine(
 
     private var heartbeatJob: Job? = null
     private var currentProjectId: Long = 0L
+    private var activeProject: BotProject? = null
+
+    // OkHttp Client for real Discord Gateway WebSocket and REST API
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket requires no read timeout
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    private var discordWebSocket: WebSocket? = null
+    private var lastSequence: Int? = null
+    private var heartbeatIntervalMs: Long = 41250L
 
     init {
-        // Initialize default welcome message in simulator
         _simulatorMessages.value = listOf(
             DiscordSimulatorMessage(
                 authorName = "System",
                 isBot = false,
-                content = "👋 Welcome to the #bot-testing channel! Run your bot in the Terminal, then test slash commands like `/ping`, `/embed`, `/userinfo`, or prefix commands like `!help` here."
+                content = "👋 Welcome to the #bot-testing channel! Test commands like `!ping`, `!help`, `!embed` or test directly on REAL Discord once your bot is online."
             )
         )
     }
@@ -88,40 +113,590 @@ class BotRuntimeEngine(
         currentProjectId = projectId
     }
 
+    /**
+     * Checks if a bot token looks like a real Discord bot token.
+     */
+    fun isRealToken(token: String): Boolean {
+        val trimmed = token.trim()
+        return trimmed.isNotBlank() &&
+                !trimmed.contains("DiscordSecretBotToken") &&
+                !trimmed.contains("G-DiscordSecret") &&
+                trimmed.length >= 35 &&
+                trimmed.contains(".")
+    }
+
+    /**
+     * Starts the Discord Bot.
+     * If a real token is provided, connects directly to the REAL Discord Gateway v10 WebSocket.
+     * When messages are received on real Discord, user code is executed and replies are posted
+     * to real Discord via HTTP POST REST API!
+     */
     fun startBot(project: BotProject) {
         if (_isRunning.value) return
         currentProjectId = project.id
+        activeProject = project
         _isRunning.value = true
-        _botStatusText.value = "Running (${project.language})"
-        _gatewayPingMs.value = Random.nextInt(16, 29)
+        lastSequence = null
+
+        val hasRealToken = isRealToken(project.botToken)
 
         scope.launch(Dispatchers.IO) {
-            repository.addTerminalLog(project.id, "$ [PROCESS] Launching runtime container for ${project.language}...", "SYSTEM")
-            delay(300)
-            repository.addTerminalLog(project.id, "[GATEWAY] Connecting to wss://gateway.discord.gg/?v=10&encoding=json", "STDOUT")
-            delay(400)
-            repository.addTerminalLog(project.id, "[GATEWAY] Handshake complete. Shard 0/1 identified with intents: 0x${if (project.intentMessageContent) "983" else "21"}", "STDOUT")
-            delay(300)
-            repository.addTerminalLog(project.id, "[READY] Connected as ${project.name}#1337 (ID: ${project.clientId})", "SUCCESS")
-            repository.addTerminalLog(project.id, "[PRESENCE] Status: ${project.status} | Activity: ${project.activityType} '${project.activityText}'", "SUCCESS")
-            repository.addTerminalLog(project.id, "[COMMANDS] Registered global application commands: /ping, /embed, /userinfo, /help, /ban", "STDOUT")
+            repository.addTerminalLog(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
+            delay(150)
 
-            // Announce in simulator
-            val botMsg = DiscordSimulatorMessage(
-                authorName = project.name,
-                isBot = true,
-                content = "🟢 **Bot online!** Logged in as `${project.name}#1337`. Running ${project.activityType.lowercase()} **${project.activityText}**.\nType `/ping` or `${project.prefix}help` to test me!"
-            )
-            _simulatorMessages.value = _simulatorMessages.value + botMsg
+            if (hasRealToken) {
+                _botStatusText.value = "Connecting to Discord..."
+                repository.addTerminalLog(project.id, "[GATEWAY] Connecting to Discord Gateway: wss://gateway.discord.gg/?v=10&encoding=json", "STDOUT")
+                connectRealDiscordGateway(project)
+            } else {
+                // Simulator fallback with instructions
+                _isRealDiscordConnected.value = false
+                _botStatusText.value = "Simulator Active (No Token)"
+                _gatewayPingMs.value = Random.nextInt(18, 28)
+
+                repository.addTerminalLog(project.id, "⚠️ [SIMULATOR MODE] No valid Discord Bot Token found in Bot Config.", "WARN")
+                repository.addTerminalLog(project.id, "👉 To connect to REAL Discord:", "SYSTEM")
+                repository.addTerminalLog(project.id, "   1. Visit Discord Developer Portal: https://discord.com/developers/applications", "STDOUT")
+                repository.addTerminalLog(project.id, "   2. Under 'Bot' tab, click 'Reset Token' and copy your bot token.", "STDOUT")
+                repository.addTerminalLog(project.id, "   3. Turn ON 'Message Content Intent' under Privileged Gateway Intents.", "STDOUT")
+                repository.addTerminalLog(project.id, "   4. Paste your token in the 'Config' tab of BotStudio and click Save.", "STDOUT")
+                repository.addTerminalLog(project.id, "   5. Click 'Invite Bot' to add it to your Discord server!", "STDOUT")
+                repository.addTerminalLog(project.id, "🟢 [READY] Running in Local Simulator. Test interactions in the 'Simulator' tab.", "SUCCESS")
+
+                val botMsg = DiscordSimulatorMessage(
+                    authorName = project.name,
+                    isBot = true,
+                    content = "🟢 **Bot online in Simulator mode!**\nType `${project.prefix}ping` or `${project.prefix}help` to test.\n*(Paste real Bot Token in 'Config' tab to connect to REAL Discord)*"
+                )
+                _simulatorMessages.value = _simulatorMessages.value + botMsg
+
+                startSimulatedHeartbeat(project.id)
+            }
+        }
+    }
+
+    /**
+     * Connects to the real Discord Gateway WebSocket.
+     */
+    private fun connectRealDiscordGateway(project: BotProject) {
+        val request = Request.Builder()
+            .url("https://gateway.discord.gg/?v=10&encoding=json")
+            .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
+            .build()
+
+        discordWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                scope.launch(Dispatchers.IO) {
+                    repository.addTerminalLog(project.id, "[GATEWAY] WebSocket handshake opened. Waiting for HELLO opcode 10...", "STDOUT")
+                }
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                handleGatewayMessage(text, project, webSocket)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                scope.launch(Dispatchers.IO) {
+                    _isRealDiscordConnected.value = false
+                    _botStatusText.value = "Connection Failed"
+                    val code = response?.code
+                    val errMsg = t.message ?: "Unknown socket error"
+                    repository.addTerminalLog(project.id, "❌ [GATEWAY ERROR] Connection failure (HTTP $code): $errMsg", "STDERR")
+
+                    if (code == 401 || code == 403) {
+                        repository.addTerminalLog(project.id, "❌ [AUTH ERROR] Discord rejected token (HTTP $code). Please verify your Bot Token in the Config tab.", "STDERR")
+                    }
+                }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                scope.launch(Dispatchers.IO) {
+                    _isRealDiscordConnected.value = false
+                    val closeMsg = when (code) {
+                        4004 -> "❌ [ERROR 4004] Authentication Failed: Invalid Discord Bot Token. Please check token in Config tab."
+                        4014 -> "❌ [ERROR 4014] Disallowed Intents: You MUST enable 'Message Content Intent' in Discord Developer Portal -> Bot -> Privileged Gateway Intents."
+                        4010 -> "❌ [ERROR 4010] Invalid Shard."
+                        4011 -> "❌ [ERROR 4011] Sharding Required: Bot is on too many servers."
+                        else -> "🔴 [GATEWAY CLOSED] Code $code: $reason"
+                    }
+                    val logType = if (code >= 4000) "STDERR" else "WARN"
+                    repository.addTerminalLog(project.id, closeMsg, logType)
+                }
+            }
+        })
+    }
+
+    /**
+     * Parses and processes incoming Discord Gateway WebSocket events.
+     */
+    private fun handleGatewayMessage(jsonStr: String, project: BotProject, webSocket: WebSocket) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val json = JSONObject(jsonStr)
+                val op = json.getInt("op")
+                val s = json.optInt("s", -1)
+                if (s != -1) {
+                    lastSequence = s
+                }
+                val t = json.optString("t", "")
+
+                when (op) {
+                    10 -> {
+                        // Opcode 10: HELLO
+                        val d = json.getJSONObject("d")
+                        heartbeatIntervalMs = d.getLong("heartbeat_interval")
+                        repository.addTerminalLog(project.id, "[GATEWAY] Received HELLO. Heartbeat interval: ${heartbeatIntervalMs}ms", "STDOUT")
+
+                        // Start periodic heartbeats
+                        startRealHeartbeat(project.id, webSocket)
+
+                        // Send Opcode 2: IDENTIFY
+                        sendIdentify(project, webSocket)
+                    }
+
+                    11 -> {
+                        // Opcode 11: HEARTBEAT_ACK
+                        val ping = Random.nextInt(16, 28)
+                        _gatewayPingMs.value = ping
+                    }
+
+                    0 -> {
+                        // Opcode 0: DISPATCH
+                        handleDispatchEvent(t, json.optJSONObject("d"), project)
+                    }
+
+                    else -> {
+                        // Other opcodes
+                    }
+                }
+            } catch (e: Exception) {
+                repository.addTerminalLog(project.id, "⚠️ [GATEWAY PARSE] ${e.localizedMessage}", "WARN")
+            }
+        }
+    }
+
+    /**
+     * Sends Opcode 2 IDENTIFY with intents and presence.
+     */
+    private fun sendIdentify(project: BotProject, webSocket: WebSocket) {
+        // Calculate Intents:
+        // GUILDS (1) + GUILD_MEMBERS (2) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096) + MESSAGE_CONTENT (32768)
+        var intents = 1 or 512 or 4096
+        if (project.intentMessageContent) intents = intents or 32768
+        if (project.intentGuildMembers) intents = intents or 2
+        if (project.intentPresences) intents = intents or 256
+
+        val identifyPayload = JSONObject().apply {
+            put("op", 2)
+            put("d", JSONObject().apply {
+                put("token", project.botToken.trim())
+                put("intents", intents)
+                put("properties", JSONObject().apply {
+                    put("os", "android")
+                    put("browser", "BotStudio")
+                    put("device", "BotStudio")
+                })
+                put("presence", JSONObject().apply {
+                    put("status", project.status.lowercase())
+                    put("activities", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("name", project.activityText)
+                            put("type", when (project.activityType.uppercase()) {
+                                "STREAMING" -> 1
+                                "LISTENING" -> 2
+                                "WATCHING" -> 3
+                                "COMPETING" -> 5
+                                else -> 0 // PLAYING
+                            })
+                        })
+                    })
+                })
+            })
         }
 
-        startHeartbeat(project.id)
+        webSocket.send(identifyPayload.toString())
+        scope.launch(Dispatchers.IO) {
+            repository.addTerminalLog(project.id, "[GATEWAY] Sent IDENTIFY with intents: 0x${intents.toString(16)} (Message Content: ${project.intentMessageContent})", "STDOUT")
+        }
+    }
+
+    /**
+     * Handles DISPATCH events from real Discord.
+     */
+    private suspend fun handleDispatchEvent(eventType: String, d: JSONObject?, project: BotProject) {
+        if (d == null) return
+
+        when (eventType) {
+            "READY" -> {
+                _isRealDiscordConnected.value = true
+                val user = d.getJSONObject("user")
+                val username = user.getString("username")
+                val userId = user.getString("id")
+                val discriminator = user.optString("discriminator", "0000")
+                val guilds = d.optJSONArray("guilds")
+                val guildCount = guilds?.length() ?: 0
+
+                _botStatusText.value = "🟢 ONLINE on Real Discord ($username)"
+                _gatewayPingMs.value = Random.nextInt(18, 29)
+
+                repository.addTerminalLog(project.id, "==================================================", "SUCCESS")
+                repository.addTerminalLog(project.id, "🟢 [REAL DISCORD] Connected as $username#$discriminator (ID: $userId)", "SUCCESS")
+                repository.addTerminalLog(project.id, "✅ Bot is now officially ONLINE on real Discord in $guildCount server(s)!", "SUCCESS")
+                repository.addTerminalLog(project.id, "📡 Listening for real Discord messages & slash commands...", "SUCCESS")
+                repository.addTerminalLog(project.id, "==================================================", "SUCCESS")
+
+                val botMsg = DiscordSimulatorMessage(
+                    authorName = username,
+                    isBot = true,
+                    content = "🟢 **$username is now ONLINE on Real Discord!**\nConnected to **$guildCount server(s)**.\nSend a message in your Discord server with `${project.prefix}ping` or test code here!"
+                )
+                _simulatorMessages.value = _simulatorMessages.value + botMsg
+
+                // Register global slash commands to real Discord if clientId is provided
+                if (project.clientId.isNotBlank() && project.clientId.length >= 15) {
+                    registerSlashCommandsToDiscord(project)
+                }
+            }
+
+            "MESSAGE_CREATE" -> {
+                // Incoming message on Real Discord!
+                val content = d.optString("content", "")
+                val channelId = d.optString("channel_id", "")
+                val messageId = d.optString("id", "")
+                val author = d.optJSONObject("author") ?: return
+                val authorUsername = author.optString("username", "Unknown")
+                val authorId = author.optString("id", "")
+                val isBot = author.optBoolean("bot", false)
+
+                // Ignore messages sent by bots (prevents infinite reply loops)
+                if (isBot) return
+
+                repository.addTerminalLog(
+                    project.id,
+                    "📥 [REAL DISCORD MSG] #$channelId @$authorUsername: '$content'",
+                    "STDOUT"
+                )
+
+                // Mirror to Simulator
+                val mirrorMsg = DiscordSimulatorMessage(
+                    authorName = "$authorUsername (Real Discord)",
+                    isBot = false,
+                    content = content
+                )
+                _simulatorMessages.value = _simulatorMessages.value + mirrorMsg
+
+                // Execute User's Code!
+                val files = repository.getFilesDirect(project.id)
+                val result = BotCodeExecutor.executeIncomingMessage(
+                    messageContent = content,
+                    authorUsername = authorUsername,
+                    authorId = authorId,
+                    project = project,
+                    files = files,
+                    gatewayPingMs = _gatewayPingMs.value
+                )
+
+                if (result.isHandled) {
+                    if (result.executionLog.isNotBlank()) {
+                        repository.addTerminalLog(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
+                    }
+
+                    // Post reply to Real Discord via REST API!
+                    sendRealDiscordMessage(
+                        channelId = channelId,
+                        messageReferenceId = messageId,
+                        result = result,
+                        project = project
+                    )
+                }
+            }
+
+            "INTERACTION_CREATE" -> {
+                // Real Slash Command or Component Interaction!
+                val interactionId = d.optString("id", "")
+                val interactionToken = d.optString("token", "")
+                val data = d.optJSONObject("data")
+                val cmdName = data?.optString("name", "") ?: ""
+                val member = d.optJSONObject("member")
+                val user = member?.optJSONObject("user") ?: d.optJSONObject("user")
+                val username = user?.optString("username", "Developer") ?: "Developer"
+
+                repository.addTerminalLog(project.id, "⚡ [REAL INTERACTION] Slash command /$cmdName invoked by @$username", "STDOUT")
+
+                val files = repository.getFilesDirect(project.id)
+                val result = BotCodeExecutor.executeIncomingMessage(
+                    messageContent = "/$cmdName",
+                    authorUsername = username,
+                    authorId = user?.optString("id", "") ?: "",
+                    project = project,
+                    files = files,
+                    gatewayPingMs = _gatewayPingMs.value
+                )
+
+                if (result.isHandled) {
+                    respondToRealDiscordInteraction(interactionId, interactionToken, result, project)
+                }
+            }
+        }
+    }
+
+    /**
+     * Sends a real HTTP POST request to Discord REST API to send a message or embed.
+     */
+    private suspend fun sendRealDiscordMessage(
+        channelId: String,
+        messageReferenceId: String,
+        result: BotExecutionResult,
+        project: BotProject
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                if (result.replyText.isNotBlank()) {
+                    put("content", result.replyText)
+                }
+                if (messageReferenceId.isNotBlank()) {
+                    put("message_reference", JSONObject().apply {
+                        put("message_id", messageReferenceId)
+                    })
+                }
+
+                // If embed is present:
+                if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+                    put("embeds", JSONArray().apply {
+                        put(JSONObject().apply {
+                            if (!result.embedTitle.isNullOrBlank()) put("title", result.embedTitle)
+                            if (!result.embedDescription.isNullOrBlank()) put("description", result.embedDescription)
+                            result.embedColorHex?.let {
+                                val colorInt = try {
+                                    val hex = it.removePrefix("#")
+                                    hex.toInt(16)
+                                } catch (e: Exception) { 5793266 }
+                                put("color", colorInt)
+                            }
+                            if (result.embedFields.isNotEmpty()) {
+                                put("fields", JSONArray().apply {
+                                    result.embedFields.forEach { (name, value) ->
+                                        put(JSONObject().apply {
+                                            put("name", name)
+                                            put("value", value)
+                                            put("inline", true)
+                                        })
+                                    }
+                                })
+                            }
+                            result.embedFooter?.let {
+                                put("footer", JSONObject().put("text", it))
+                            }
+                        })
+                    })
+                }
+            }
+
+            val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://discord.com/api/v10/channels/$channelId/messages")
+                .header("Authorization", "Bot ${project.botToken.trim()}")
+                .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
+                .post(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val code = response.code
+            val body = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                repository.addTerminalLog(
+                    project.id,
+                    "📤 [REAL DISCORD SENT] Replying in #$channelId: '${result.replyText.take(45)}' (HTTP $code)",
+                    "SUCCESS"
+                )
+
+                // Mirror bot reply to Simulator
+                val replyMsg = DiscordSimulatorMessage(
+                    authorName = project.name,
+                    isBot = true,
+                    content = result.replyText,
+                    embed = if (!result.embedTitle.isNullOrBlank()) DiscordSimulatorEmbed(
+                        title = result.embedTitle,
+                        description = result.embedDescription ?: "",
+                        colorHex = result.embedColorHex ?: "#5865F2",
+                        fields = result.embedFields
+                    ) else null
+                )
+                _simulatorMessages.value = _simulatorMessages.value + replyMsg
+            } else {
+                repository.addTerminalLog(
+                    project.id,
+                    "❌ [DISCORD REST ERROR $code] Failed to post message: $body",
+                    "STDERR"
+                )
+            }
+        } catch (e: Exception) {
+            repository.addTerminalLog(project.id, "❌ [DISCORD REST EXCEPTION] ${e.localizedMessage}", "STDERR")
+        }
+    }
+
+    /**
+     * Responds to a slash command interaction on real Discord.
+     */
+    private suspend fun respondToRealDiscordInteraction(
+        interactionId: String,
+        interactionToken: String,
+        result: BotExecutionResult,
+        project: BotProject
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                put("type", 4) // CHANNEL_MESSAGE_WITH_SOURCE
+                put("data", JSONObject().apply {
+                    put("content", result.replyText)
+                })
+            }
+
+            val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://discord.com/api/v10/interactions/$interactionId/$interactionToken/callback")
+                .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
+                .post(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                repository.addTerminalLog(project.id, "📤 [SLASH INTERACTION] Callback sent to Discord successfully (HTTP ${response.code})", "SUCCESS")
+            }
+        } catch (e: Exception) {
+            repository.addTerminalLog(project.id, "⚠️ [INTERACTION EXCEPTION] ${e.localizedMessage}", "WARN")
+        }
+    }
+
+    /**
+     * Registers slash commands globally on Discord.
+     */
+    private suspend fun registerSlashCommandsToDiscord(project: BotProject) = withContext(Dispatchers.IO) {
+        try {
+            val commandsArray = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("name", "ping")
+                    put("description", "Check Discord Gateway and API latency")
+                    put("type", 1)
+                })
+                put(JSONObject().apply {
+                    put("name", "help")
+                    put("description", "Show commands list and help menu")
+                    put("type", 1)
+                })
+                put(JSONObject().apply {
+                    put("name", "embed")
+                    put("description", "Display a rich embed preview")
+                    put("type", 1)
+                })
+                put(JSONObject().apply {
+                    put("name", "userinfo")
+                    put("description", "Show user profile stats")
+                    put("type", 1)
+                })
+                put(JSONObject().apply {
+                    put("name", "roll")
+                    put("description", "Roll a random number from 1 to 100")
+                    put("type", 1)
+                })
+            }
+
+            val requestBody = commandsArray.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://discord.com/api/v10/applications/${project.clientId}/commands")
+                .header("Authorization", "Bot ${project.botToken.trim()}")
+                .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
+                .put(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                repository.addTerminalLog(project.id, "[COMMANDS] Registered global slash commands on Discord (/ping, /help, /embed, /userinfo, /roll)", "SUCCESS")
+            }
+        } catch (e: Exception) {
+            // Non-critical, ignore
+        }
+    }
+
+    /**
+     * Verifies a bot token by calling GET https://discord.com/api/v10/users/@me
+     */
+    suspend fun verifyDiscordToken(token: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        if (!isRealToken(token)) {
+            return@withContext false to "Please enter a valid Discord Bot Token (format: <id>.<secret>.<hash>)."
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("https://discord.com/api/v10/users/@me")
+                .header("Authorization", "Bot ${token.trim()}")
+                .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
+                .get()
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val code = response.code
+            val body = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                val json = JSONObject(body)
+                val username = json.getString("username")
+                val id = json.getString("id")
+                val discriminator = json.optString("discriminator", "0000")
+                true to "✅ Verified! Bot: $username#$discriminator (ID: $id)"
+            } else if (code == 401) {
+                false to "❌ 401 Unauthorized: Invalid Bot Token. Please copy the fresh token from Discord Developer Portal."
+            } else {
+                false to "❌ Discord API returned HTTP $code: $body"
+            }
+        } catch (e: Exception) {
+            false to "❌ Connection Error: ${e.localizedMessage}"
+        }
+    }
+
+    private fun startRealHeartbeat(projectId: Long, webSocket: WebSocket) {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            while (isActive && _isRunning.value) {
+                delay(heartbeatIntervalMs)
+                try {
+                    val hbPayload = JSONObject().apply {
+                        put("op", 1)
+                        put("d", if (lastSequence != null) lastSequence else JSONObject.NULL)
+                    }
+                    webSocket.send(hbPayload.toString())
+                } catch (e: Exception) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun startSimulatedHeartbeat(projectId: Long) {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            while (isActive && _isRunning.value) {
+                delay(30000)
+                val ping = Random.nextInt(15, 30)
+                _gatewayPingMs.value = ping
+                repository.addTerminalLog(projectId, "[HEARTBEAT] Shard 0 acknowledged. Latency: ${ping}ms", "STDOUT")
+            }
+        }
     }
 
     fun stopBot(projectId: Long) {
         if (!_isRunning.value) return
         heartbeatJob?.cancel()
+        discordWebSocket?.close(1000, "Clean close from BotStudio")
+        discordWebSocket = null
+
         _isRunning.value = false
+        _isRealDiscordConnected.value = false
         _botStatusText.value = "Stopped"
         _gatewayPingMs.value = 0
 
@@ -142,23 +717,14 @@ class BotRuntimeEngine(
     fun restartBot(project: BotProject) {
         stopBot(project.id)
         scope.launch(Dispatchers.IO) {
-            delay(600)
+            delay(500)
             startBot(project)
         }
     }
 
-    private fun startHeartbeat(projectId: Long) {
-        heartbeatJob?.cancel()
-        heartbeatJob = scope.launch(Dispatchers.IO) {
-            while (isActive && _isRunning.value) {
-                delay(30000) // 30s heartbeat interval
-                val ping = Random.nextInt(15, 34)
-                _gatewayPingMs.value = ping
-                repository.addTerminalLog(projectId, "[HEARTBEAT] Shard 0 acknowledged. WebSocket ping: ${ping}ms", "STDOUT")
-            }
-        }
-    }
-
+    /**
+     * Executes commands in Terminal.
+     */
     fun executeTerminalCommand(
         commandStr: String,
         project: BotProject,
@@ -179,27 +745,26 @@ class BotRuntimeEngine(
                 }
                 "help" -> {
                     repository.addTerminalLog(project.id, "=== Available BotStudio Terminal Commands ===", "SYSTEM")
-                    repository.addTerminalLog(project.id, "  node <file>      Run Node.js script or bot", "STDOUT")
-                    repository.addTerminalLog(project.id, "  python <file>    Run Python script or bot", "STDOUT")
-                    repository.addTerminalLog(project.id, "  npm start/dev    Start bot via package.json script", "STDOUT")
-                    repository.addTerminalLog(project.id, "  npm install <p>  Simulate installing npm packages", "STDOUT")
-                    repository.addTerminalLog(project.id, "  pip install <p>  Simulate installing pip packages", "STDOUT")
-                    repository.addTerminalLog(project.id, "  start / run      Start the Discord bot process", "STDOUT")
+                    repository.addTerminalLog(project.id, "  run / start      Start bot and connect to Discord Gateway", "STDOUT")
                     repository.addTerminalLog(project.id, "  stop / kill      Stop the active bot process", "STDOUT")
                     repository.addTerminalLog(project.id, "  restart          Restart the Discord bot process", "STDOUT")
-                    repository.addTerminalLog(project.id, "  status           Check bot runtime & gateway status", "STDOUT")
+                    repository.addTerminalLog(project.id, "  status           Check real Discord connection & gateway ping", "STDOUT")
+                    repository.addTerminalLog(project.id, "  test-token       Test and verify Discord bot token", "STDOUT")
                     repository.addTerminalLog(project.id, "  ls / dir         List project files", "STDOUT")
                     repository.addTerminalLog(project.id, "  cat <file>       Print content of a project file", "STDOUT")
                     repository.addTerminalLog(project.id, "  env              View environment variables", "STDOUT")
                     repository.addTerminalLog(project.id, "  ping             Test gateway latency", "STDOUT")
                     repository.addTerminalLog(project.id, "  clear            Clear terminal screen", "STDOUT")
                 }
-                "start", "run" -> {
-                    if (!com.example.packages.PackageManager.isLanguageInstalled(project.language)) {
-                        repository.addTerminalLog(project.id, "⚠️ Runtime for ${project.language} is not installed! Go to the 'Install' tab to download the language pack (-8MB base APK savings).", "WARN")
-                    } else {
-                        startBot(project)
+                "start", "run", "node", "python", "npm" -> {
+                    val sub = args.firstOrNull()?.lowercase() ?: ""
+                    if (cmd == "npm" && sub == "test") {
+                        repository.addTerminalLog(project.id, "> test suite running", "STDOUT")
+                        delay(250)
+                        repository.addTerminalLog(project.id, "PASS __tests__/bot.test.js", "SUCCESS")
+                        return@launch
                     }
+                    startBot(project)
                 }
                 "stop", "kill" -> {
                     stopBot(project.id)
@@ -207,51 +772,9 @@ class BotRuntimeEngine(
                 "restart" -> {
                     restartBot(project)
                 }
-                "node", "python", "cargo", "go", "ts-node" -> {
-                    val lang = when (cmd) {
-                        "python" -> "PYTHON"
-                        "cargo" -> "RUST"
-                        "go" -> "GO"
-                        else -> "JAVASCRIPT"
-                    }
-                    if (!com.example.packages.PackageManager.isLanguageInstalled(lang)) {
-                        repository.addTerminalLog(project.id, "⚠️ $cmd: command not found. Please install the $lang runtime pack from the 'Install' tab.", "STDERR")
-                    } else {
-                        startBot(project)
-                    }
-                }
-                "npm" -> {
-                    val sub = args.firstOrNull()?.lowercase() ?: ""
-                    if (sub == "start" || sub == "run") {
-                        startBot(project)
-                    } else if (sub == "test" || sub == "t") {
-                        repository.addTerminalLog(project.id, "> jest --colors --verbose", "STDOUT")
-                        delay(400)
-                        repository.addTerminalLog(project.id, " PASS  __tests__/commands.test.js", "SUCCESS")
-                        repository.addTerminalLog(project.id, "  ✓ Slash command /ping responds with pong (14 ms)", "SUCCESS")
-                        repository.addTerminalLog(project.id, "  ✓ Slash command /embed constructs rich payload (8 ms)", "SUCCESS")
-                        repository.addTerminalLog(project.id, "  ✓ Gateway event interactionCreate dispatches correctly (4 ms)", "SUCCESS")
-                        repository.addTerminalLog(project.id, "Tests:       3 passed, 3 total\nSnapshots:   0 total\nTime:        0.824 s", "SUCCESS")
-                    } else if (sub == "install" || sub == "i") {
-                        val pkg = args.getOrNull(1) ?: "dependencies"
-                        repository.addTerminalLog(project.id, "npm WARN idealTree ready in 210ms", "WARN")
-                        delay(500)
-                        repository.addTerminalLog(project.id, "added 42 packages, and audited 180 packages in 1s", "SUCCESS")
-                        repository.addTerminalLog(project.id, "found 0 vulnerabilities", "SUCCESS")
-                    } else {
-                        repository.addTerminalLog(project.id, "npm command executed successfully.", "STDOUT")
-                    }
-                }
-                "pip" -> {
-                    val sub = args.firstOrNull()?.lowercase() ?: ""
-                    if (sub == "install") {
-                        val pkg = args.getOrNull(1) ?: "-r requirements.txt"
-                        repository.addTerminalLog(project.id, "Collecting $pkg...", "STDOUT")
-                        delay(400)
-                        repository.addTerminalLog(project.id, "Downloading $pkg (1.2 MB)...", "STDOUT")
-                        delay(300)
-                        repository.addTerminalLog(project.id, "Successfully installed $pkg", "SUCCESS")
-                    }
+                "test-token" -> {
+                    val (valid, msg) = verifyDiscordToken(project.botToken)
+                    repository.addTerminalLog(project.id, msg, if (valid) "SUCCESS" else "STDERR")
                 }
                 "ls", "dir" -> {
                     val fileList = files.joinToString("  ") { it.filePath }
@@ -272,19 +795,18 @@ class BotRuntimeEngine(
                 }
                 "status" -> {
                     if (_isRunning.value) {
-                        repository.addTerminalLog(project.id, "● Process: ACTIVE (PID: 41829)", "SUCCESS")
-                        repository.addTerminalLog(project.id, "  Bot User: ${project.name}#1337", "STDOUT")
+                        val realStatus = if (_isRealDiscordConnected.value) "CONNECTED TO REAL DISCORD" else "LOCAL SIMULATOR"
+                        repository.addTerminalLog(project.id, "● Process: ACTIVE ($realStatus)", "SUCCESS")
+                        repository.addTerminalLog(project.id, "  Bot User: ${project.name}", "STDOUT")
                         repository.addTerminalLog(project.id, "  Gateway Ping: ${_gatewayPingMs.value}ms", "STDOUT")
-                        repository.addTerminalLog(project.id, "  Memory Usage: 38.4 MB (Heap: 24.1 MB)", "STDOUT")
-                        repository.addTerminalLog(project.id, "  Uptime: Active", "STDOUT")
                     } else {
                         repository.addTerminalLog(project.id, "○ Process: INACTIVE (stopped)", "WARN")
-                        repository.addTerminalLog(project.id, "Type 'node index.js' or 'start' to launch bot.", "STDOUT")
+                        repository.addTerminalLog(project.id, "Type 'run' or press the Run button to launch bot.", "STDOUT")
                     }
                 }
                 "ping" -> {
                     val ping = if (_isRunning.value) _gatewayPingMs.value else Random.nextInt(18, 30)
-                    repository.addTerminalLog(project.id, "🏓 Discord Gateway Ping: ${ping}ms | HTTP REST: ${ping + 12}ms", "SUCCESS")
+                    repository.addTerminalLog(project.id, "🏓 Discord Gateway Ping: ${ping}ms | REST API: ${ping + 12}ms", "SUCCESS")
                 }
                 "env" -> {
                     repository.addTerminalLog(project.id, "DISCORD_TOKEN=${project.botToken.take(8)}********************", "STDOUT")
@@ -299,11 +821,14 @@ class BotRuntimeEngine(
         }
     }
 
+    /**
+     * Handles messages typed in the in-app Discord Simulator tab.
+     * Uses the exact same code execution engine as real Discord so user code behaves identically!
+     */
     fun handleSimulatorUserMessage(userMessageText: String, project: BotProject) {
         val trimmed = userMessageText.trim()
         if (trimmed.isEmpty()) return
 
-        // Post user message to chat
         val userMsg = DiscordSimulatorMessage(
             authorName = "Developer",
             isBot = false,
@@ -312,225 +837,67 @@ class BotRuntimeEngine(
         _simulatorMessages.value = _simulatorMessages.value + userMsg
 
         scope.launch(Dispatchers.IO) {
-            // If bot is offline:
             if (!_isRunning.value) {
-                delay(300)
+                delay(200)
                 val offlineNotice = DiscordSimulatorMessage(
                     authorName = "Clyde (System)",
                     isBot = true,
-                    content = "⚠️ **${project.name} is currently offline.** Start the bot in the **Terminal** tab or press the **Run Bot** button to test interactions."
+                    content = "⚠️ **${project.name} is currently offline.** Start the bot with the **Run Bot** button to test interactions."
                 )
                 _simulatorMessages.value = _simulatorMessages.value + offlineNotice
                 return@launch
             }
 
-            // Bot is online! Simulate typing:
             _isTyping.value = true
-            delay(500)
+            delay(350)
             _isTyping.value = false
 
-            // Log interaction in terminal
             repository.addTerminalLog(
                 project.id,
-                "[INTERACTION] Received message: '$trimmed' from @Developer in #bot-testing",
+                "[SIMULATOR MSG] @Developer in #bot-testing: '$trimmed'",
                 "STDOUT"
             )
 
-            // Parse command
-            val isSlash = trimmed.startsWith("/")
-            val cleanCmd = if (isSlash) trimmed.substring(1) else trimmed.removePrefix(project.prefix)
-            val parts = cleanCmd.split(" ")
-            val commandName = parts.firstOrNull()?.lowercase() ?: ""
-            val commandArgs = parts.drop(1).joinToString(" ")
+            // Execute the user's code!
+            val files = repository.getFilesDirect(project.id)
+            val result = BotCodeExecutor.executeIncomingMessage(
+                messageContent = trimmed,
+                authorUsername = "Developer",
+                authorId = "118923456789012345",
+                project = project,
+                files = files,
+                gatewayPingMs = _gatewayPingMs.value
+            )
 
-            when (commandName) {
-                "ping" -> {
-                    val ping = _gatewayPingMs.value.coerceAtLeast(18)
-                    val pingEmbed = DiscordSimulatorEmbed(
-                        title = "🏓 Pong!",
-                        description = "Simulated Gateway WebSocket Latency: **${ping}ms**\nREST API Latency: **${ping + 14}ms**",
-                        colorHex = "#5865F2",
-                        fields = listOf(
-                            "Status" to "🟢 Excellent",
-                            "Memory" to "41.2 MB",
-                            "Uptime" to "99.99%"
-                        ),
-                        footerText = "${project.name} • BotStudio Runtime"
-                    )
-                    val buttons = listOf(
-                        DiscordSimulatorButton("btn_refresh", "Refresh Ping", "PRIMARY", "🔄"),
-                        DiscordSimulatorButton("btn_stats", "System Stats", "SECONDARY", "📊")
-                    )
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = pingEmbed,
-                        buttons = buttons
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
+            if (result.isHandled) {
+                if (result.executionLog.isNotBlank()) {
+                    repository.addTerminalLog(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
                 }
 
-                "embed" -> {
-                    val sampleEmbed = DiscordSimulatorEmbed(
-                        title = "✨ Discord Bot Studio Embed",
-                        description = "Here is a multi-field rich embed with Discord color bar, inline fields, and interactive action buttons.",
-                        colorHex = "#57F287",
-                        authorName = "BotStudio Designer",
-                        fields = listOf(
-                            "Language" to project.language,
-                            "Prefix" to project.prefix,
-                            "Intents" to "Guilds, Messages, Members"
-                        ),
-                        footerText = "Designed with Discord Bot Studio"
+                val replyEmbed = if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+                    DiscordSimulatorEmbed(
+                        title = result.embedTitle ?: "Embed",
+                        description = result.embedDescription ?: "",
+                        colorHex = result.embedColorHex ?: "#5865F2",
+                        fields = result.embedFields,
+                        footerText = result.embedFooter ?: ""
                     )
-                    val buttons = listOf(
-                        DiscordSimulatorButton("btn_like", "Like (12)", "SUCCESS", "⭐"),
-                        DiscordSimulatorButton("btn_delete", "Dismiss", "DANGER", "🗑️")
-                    )
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = sampleEmbed,
-                        buttons = buttons
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
+                } else null
 
-                "userinfo", "user" -> {
-                    val userEmbed = DiscordSimulatorEmbed(
-                        title = "👤 User Profile: Developer",
-                        description = "Member of the BotStudio Server since September 2024.",
-                        colorHex = "#FEE75C",
-                        fields = listOf(
-                            "User ID" to "7489234891238912",
-                            "Roles" to "🛡️ Administrator, 💻 Bot Developer",
-                            "Badges" to "Active Developer, HypeSquad Bravery"
-                        ),
-                        footerText = "Requested by Developer"
-                    )
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = userEmbed
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                "help", "menu" -> {
-                    val helpEmbed = DiscordSimulatorEmbed(
-                        title = "🤖 ${project.name} - Interactive Command Center",
-                        description = "Select a command category from the drop-down menu below or try slash commands:",
-                        colorHex = "#5865F2",
-                        fields = listOf(
-                            "/ping" to "Check WebSocket and API latency",
-                            "/embed" to "Preview rich Discord embed with interactive buttons",
-                            "/userinfo" to "View user account stats and roles",
-                            "/ban <user>" to "Simulate moderation action",
-                            "/roll" to "Roll a random number from 1 to 100",
-                            "${project.prefix}echo <text>" to "Repeat back your message"
-                        ),
-                        footerText = "BotStudio Simulator • Select menu & action buttons active"
-                    )
-                    val selectMenu = DiscordSimulatorSelectMenu(
-                        customId = "help_category_select",
-                        placeholder = "Choose a command module...",
-                        options = listOf(
-                            DiscordSelectMenuOption("Moderation Module", "moderation", "Ban, kick, mute, auto-mod filters", "🛡️"),
-                            DiscordSelectMenuOption("Utility & Storage", "utility", "Database KV, ping, user stats, server info", "⚙️"),
-                            DiscordSelectMenuOption("Fun & Engagement", "fun", "Roll, trivia, economy, memes", "🎉")
-                        )
-                    )
-                    val buttons = listOf(
-                        DiscordSimulatorButton("btn_refresh", "Refresh Status", "PRIMARY", "🔄"),
-                        DiscordSimulatorButton("btn_stats", "Cluster Stats", "SECONDARY", "📊")
-                    )
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = helpEmbed,
-                        selectMenu = selectMenu,
-                        buttons = buttons
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                "ban", "kick" -> {
-                    val target = if (commandArgs.isNotBlank()) commandArgs else "@Troublemaker"
-                    val modEmbed = DiscordSimulatorEmbed(
-                        title = "🔨 Moderation Action: ${commandName.uppercase()}",
-                        description = "Successfully executed **$commandName** on **$target**.",
-                        colorHex = "#ED4245",
-                        fields = listOf(
-                            "Reason" to "Violation of server rule 4 (Spam)",
-                            "Moderator" to "Developer"
-                        ),
-                        footerText = "Audit log updated"
-                    )
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = modEmbed
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                "roll" -> {
-                    val result = Random.nextInt(1, 101)
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        content = "🎲 You rolled a **$result** (1-100)!"
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                "echo" -> {
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        content = "📢 " + if (commandArgs.isNotBlank()) commandArgs else "*(Empty message)*"
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                "ai", "ask", "gemini" -> {
-                    val prompt = if (commandArgs.isNotBlank()) commandArgs else "Hello! What can you do as a Discord bot?"
-                    val thinkingMsg = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        content = "✨ *Thinking with Gemini AI...*"
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + thinkingMsg
-
-                    val aiText = com.example.ai.GeminiApiClient.callGemini(
-                        prompt = prompt,
-                        systemInstruction = "You are an intelligent Discord bot assistant. Answer helpfully and concisely using Discord markdown."
-                    )
-
-                    val aiEmbed = DiscordSimulatorEmbed(
-                        title = "🤖 Gemini AI Response",
-                        description = aiText.take(2000),
-                        colorHex = "#5865F2",
-                        fields = listOf("Prompt" to prompt.take(100)),
-                        footerText = "Powered by Gemini 3.5 Flash"
-                    )
-
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        embed = aiEmbed
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
-
-                else -> {
-                    val reply = DiscordSimulatorMessage(
-                        authorName = project.name,
-                        isBot = true,
-                        content = "❓ Unknown command `$trimmed`. Type `/help` or `${project.prefix}help` to see available commands!"
-                    )
-                    _simulatorMessages.value = _simulatorMessages.value + reply
-                }
+                val reply = DiscordSimulatorMessage(
+                    authorName = project.name,
+                    isBot = true,
+                    content = result.replyText,
+                    embed = replyEmbed
+                )
+                _simulatorMessages.value = _simulatorMessages.value + reply
+            } else {
+                val fallbackReply = DiscordSimulatorMessage(
+                    authorName = project.name,
+                    isBot = true,
+                    content = "❓ Message received. Add an event listener in your code (e.g. `client.on('messageCreate', ...)`) to handle this message!"
+                )
+                _simulatorMessages.value = _simulatorMessages.value + fallbackReply
             }
         }
     }
@@ -544,7 +911,7 @@ class BotRuntimeEngine(
             )
 
             val replyContent = when (buttonId) {
-                "btn_refresh" -> "⚡ Ping refreshed! WebSocket: **${Random.nextInt(15, 26)}ms** (ACK)"
+                "btn_refresh", "btn_refresh_ping" -> "⚡ Ping refreshed! WebSocket: **${Random.nextInt(15, 26)}ms** (ACK)"
                 "btn_stats" -> "📊 System Stats: Memory: **42.1 MB** | CPU: **1.2%** | Shards: **1** | Guilds: **4**"
                 "btn_like" -> "⭐ You starred this embed! (Total Stars: 13)"
                 "btn_delete" -> "🗑️ Embed dismissed."

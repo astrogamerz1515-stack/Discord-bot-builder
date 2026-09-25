@@ -414,6 +414,36 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    val tokenVerificationState = MutableStateFlow<String?>(null)
+    val isVerifyingToken = MutableStateFlow(false)
+
+    fun testToken(token: String) {
+        viewModelScope.launch {
+            isVerifyingToken.value = true
+            tokenVerificationState.value = "Testing token with Discord API..."
+            val (_, message) = runtimeEngine.verifyDiscordToken(token)
+            tokenVerificationState.value = message
+            isVerifyingToken.value = false
+        }
+    }
+
+    fun startBotProcess() {
+        val project = _currentProject.value ?: return
+        saveActiveFile()
+        runtimeEngine.startBot(project)
+    }
+
+    fun stopBotProcess() {
+        val project = _currentProject.value ?: return
+        runtimeEngine.stopBot(project.id)
+    }
+
+    fun restartBotProcess() {
+        val project = _currentProject.value ?: return
+        saveActiveFile()
+        runtimeEngine.restartBot(project)
+    }
+
     fun setTerminalInput(input: String) {
         _terminalInput.value = input
     }

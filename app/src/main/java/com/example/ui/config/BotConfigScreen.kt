@@ -3,6 +3,8 @@ package com.example.ui.config
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,21 +26,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -83,6 +91,11 @@ import com.example.ui.theme.DiscordYellow
 fun BotConfigScreen(viewModel: BotStudioViewModel) {
     val context = LocalContext.current
     val project by viewModel.currentProject.collectAsState()
+    val isRunning by viewModel.runtimeEngine.isRunning.collectAsState()
+    val isRealDiscordConnected by viewModel.runtimeEngine.isRealDiscordConnected.collectAsState()
+    val gatewayPingMs by viewModel.runtimeEngine.gatewayPingMs.collectAsState()
+    val tokenVerificationState by viewModel.tokenVerificationState.collectAsState()
+    val isVerifyingToken by viewModel.isVerifyingToken.collectAsState()
 
     var name by remember(project) { mutableStateOf(project?.name ?: "") }
     var prefix by remember(project) { mutableStateOf(project?.prefix ?: "!") }
@@ -184,6 +197,115 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                 Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Save", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+
+        // Real Discord Live Gateway Connection Status Banner
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    isRealDiscordConnected -> DiscordGreen.copy(alpha = 0.15f)
+                    isRunning -> DiscordYellow.copy(alpha = 0.15f)
+                    else -> DiscordSurface
+                }
+            ),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            when {
+                                isRealDiscordConnected -> DiscordGreen
+                                isRunning -> DiscordYellow
+                                else -> DiscordTextMuted
+                            },
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = when {
+                            isRealDiscordConnected -> Icons.Default.CheckCircle
+                            isRunning -> Icons.Default.Warning
+                            else -> Icons.Default.Info
+                        },
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            isRealDiscordConnected -> "🟢 Connected to REAL Discord!"
+                            isRunning -> "🟡 Running in Simulator Mode"
+                            else -> "⚪ Bot Offline / Stopped"
+                        },
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = when {
+                            isRealDiscordConnected -> "Discord Gateway v10 active • Ping: ${gatewayPingMs}ms • Real messages in your Discord server trigger your code!"
+                            isRunning -> "Bot is running locally. Enter your real Bot Token below to go online on Real Discord."
+                            else -> "Save settings and click Run in the top bar to connect your bot."
+                        },
+                        color = DiscordTextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        // Step-by-Step Real Discord Setup Guide Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "How to Test on REAL Discord (3 Steps)",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+
+                Text(
+                    text = "1️⃣ Go to https://discord.com/developers/applications → Select Bot → Click 'Reset Token' and paste it in 'Discord Bot Token' below.",
+                    color = DiscordTextSecondary,
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = "2️⃣ CRITICAL: On the Discord Developer Portal Bot page, scroll down to 'Privileged Gateway Intents' and enable ☑️ Message Content Intent (required to read messages!).",
+                    color = DiscordYellow,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "3️⃣ Click 'Save' above, invite your bot to your Discord server using the link below, and click 'Run'. Your bot will immediately appear online and respond to your commands!",
+                    color = DiscordGreen,
+                    fontSize = 11.sp
+                )
             }
         }
 
@@ -453,6 +575,53 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // Verify Token Action Button & Result
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { viewModel.testToken(token) },
+                        enabled = !isVerifyingToken && token.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp).testTag("btn_verify_discord_token")
+                    ) {
+                        if (isVerifyingToken) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Testing...", color = Color.White, fontSize = 11.sp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Test / Verify Token", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    if (token.contains("DiscordSecretBotToken") || token.isBlank()) {
+                        Text("⚠️ Demo Token", color = DiscordYellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("🔑 Custom Token", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                tokenVerificationState?.let { msg ->
+                    Surface(
+                        color = if (msg.startsWith("✅")) DiscordGreen.copy(alpha = 0.15f) else DiscordRed.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = msg,
+                            color = if (msg.startsWith("✅")) DiscordGreen else DiscordRed,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -652,14 +821,29 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                             maxLines = 2,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Discord Invite Link", inviteUrl))
-                                Toast.makeText(context, "Invite link copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Discord Invite Link", inviteUrl))
+                                    Toast.makeText(context, "Invite link copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                }
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = DiscordTextSecondary, modifier = Modifier.size(18.dp))
                             }
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = DiscordTextSecondary, modifier = Modifier.size(18.dp))
+
+                            IconButton(
+                                onClick = {
+                                    try {
+                                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(inviteUrl))
+                                        context.startActivity(browserIntent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.OpenInBrowser, contentDescription = "Open", tint = DiscordBlurple, modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                 }

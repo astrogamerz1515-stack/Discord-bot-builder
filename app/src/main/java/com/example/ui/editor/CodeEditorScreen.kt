@@ -283,10 +283,8 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             // Quick Run / Stop button
             Button(
                 onClick = {
-                    project?.let {
-                        if (isRunning) viewModel.runtimeEngine.stopBot(it.id)
-                        else viewModel.runtimeEngine.startBot(it)
-                    }
+                    if (isRunning) viewModel.stopBotProcess()
+                    else viewModel.startBotProcess()
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isRunning) DiscordRed else DiscordGreen
