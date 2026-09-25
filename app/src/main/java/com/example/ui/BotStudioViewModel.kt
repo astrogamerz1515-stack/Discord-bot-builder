@@ -153,6 +153,11 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     val showGeneratedCodeDialog = MutableStateFlow(false)
     val generatedCodeText = MutableStateFlow("")
 
+    private var projectFilesJob: Job? = null
+    private var terminalLogsJob: Job? = null
+    private var storageJob: Job? = null
+    private var diagnosticsJob: Job? = null
+
     init {
         viewModelScope.launch {
             allProjects.collect { projects ->
@@ -167,11 +172,17 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         _currentProject.value = project
         runtimeEngine.setProject(project.id)
 
+        // Cancel previous observers to prevent duplicate or conflicting flow collectors
+        projectFilesJob?.cancel()
+        terminalLogsJob?.cancel()
+        storageJob?.cancel()
+
         // Observe files for this project
-        viewModelScope.launch {
+        projectFilesJob = viewModelScope.launch {
             repository.getFiles(project.id).collect { files ->
                 _projectFiles.value = files
-                if (_activeFile.value == null || !_projectFiles.value.any { it.id == _activeFile.value?.id }) {
+                val current = _activeFile.value
+                if (current == null || !files.any { it.id == current.id }) {
                     val entrypoint = files.find { it.isEntrypoint } ?: files.firstOrNull()
                     if (entrypoint != null) {
                         selectFile(entrypoint)
@@ -181,7 +192,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Observe terminal logs for this project
-        viewModelScope.launch {
+        terminalLogsJob = viewModelScope.launch {
             repository.getTerminalLogs(project.id).collect { logs ->
                 val maxLimit = com.example.engine.SystemDeviceOptimizer.settings.value.maxLogBufferSize
                 _terminalLogs.value = if (logs.size > maxLimit) logs.takeLast(maxLimit) else logs
@@ -189,7 +200,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Observe storage key-values for this project
-        viewModelScope.launch {
+        storageJob = viewModelScope.launch {
             repository.getStorage(project.id).collect { entries ->
                 _storageEntries.value = entries
             }
@@ -197,16 +208,49 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun selectFile(file: BotFile) {
-        // Auto-save previous file if modified
-        saveActiveFile()
+        val currentFile = _activeFile.value
+        if (currentFile != null && currentFile.id == file.id) {
+            // Already active file, avoid redundant reloads
+            return
+        }
+
+        // Cancel any pending debounced autosave for the previous file
+        autoSaveJob?.cancel()
+
+        // Asynchronously persist any modifications on the previous file without mutating activeFile
+        if (currentFile != null) {
+            val contentToSave = _activeFileContent.value
+            if (contentToSave != currentFile.content) {
+                val fileToSave = currentFile.copy(content = contentToSave)
+                viewModelScope.launch {
+                    repository.saveFile(fileToSave)
+                }
+            }
+        }
+
+        // Switch to the target file immediately
         _activeFile.value = file
         _activeFileContent.value = file.content
+        _saveStatus.value = "Saved"
+
+        // Run diagnostics on background dispatcher
+        diagnosticsJob?.cancel()
         runDiagnostics(file.content, file.filePath)
     }
 
     fun updateActiveFileContent(newContent: String) {
         _activeFileContent.value = newContent
-        _activeFile.value?.let { runDiagnostics(newContent, it.filePath) }
+
+        // Smooth background debounced linting to prevent typing stutter
+        diagnosticsJob?.cancel()
+        diagnosticsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            delay(400)
+            val currentFile = _activeFile.value
+            if (currentFile != null) {
+                val diags = com.example.ui.editor.CodeLinter.lintCode(newContent, currentFile.filePath)
+                _codeDiagnostics.value = diags
+            }
+        }
 
         if (_autoSaveEnabled.value) {
             _saveStatus.value = "Saving..."
@@ -230,7 +274,11 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun runDiagnostics(code: String, filePath: String) {
-        _codeDiagnostics.value = com.example.ui.editor.CodeLinter.lintCode(code, filePath)
+        diagnosticsJob?.cancel()
+        diagnosticsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val diags = com.example.ui.editor.CodeLinter.lintCode(code, filePath)
+            _codeDiagnostics.value = diags
+        }
     }
 
     fun addStorageEntry(key: String, value: String, type: String = "STRING") {
@@ -263,9 +311,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val updatedFile = file.copy(content = currentContent)
             repository.saveFile(updatedFile)
-            _activeFile.value = updatedFile
-            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            _saveStatus.value = "Saved at $timeStr"
+            // CRITICAL: Only update _activeFile.value if the user hasn't switched to another file
+            if (_activeFile.value?.id == updatedFile.id) {
+                _activeFile.value = updatedFile
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                _saveStatus.value = "Saved at $timeStr"
+            }
         }
     }
 
@@ -291,13 +342,18 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val project = _currentProject.value ?: return
         viewModelScope.launch {
             val fileId = repository.createFile(project.id, fileName, "")
-            val created = repository.getFiles(project.id)
+            val created = repository.getFileById(fileId)
             showNewFileDialog.value = false
+            if (created != null) {
+                selectFile(created)
+                _currentTab.value = AppTab.EDITOR
+            }
         }
     }
 
     fun deleteProject(projectId: Long) {
         viewModelScope.launch {
+            runtimeEngine.stopBot(projectId)
             repository.deleteProject(projectId)
             if (_currentProject.value?.id == projectId) {
                 val remaining = allProjects.value.filter { it.id != projectId }
@@ -318,11 +374,10 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             repository.deleteFile(file.id)
             if (_activeFile.value?.id == file.id) {
                 val remaining = _projectFiles.value.filter { it.id != file.id }
+                _activeFile.value = null
+                _activeFileContent.value = ""
                 if (remaining.isNotEmpty()) {
                     selectFile(remaining.first())
-                } else {
-                    _activeFile.value = null
-                    _activeFileContent.value = ""
                 }
             }
         }
@@ -413,16 +468,21 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun insertPackageImport(importStatement: String) {
         val current = _activeFileContent.value
-        _activeFileContent.value = importStatement.trim() + "\n" + current
+        val newContent = importStatement.trim() + "\n" + current
+        updateActiveFileContent(newContent)
         saveActiveFile()
     }
 
     fun insertTextAtCursor(text: String) {
-        _activeFileContent.value += text
+        val newContent = _activeFileContent.value + text
+        updateActiveFileContent(newContent)
     }
 
     fun insertSnippet(snippetCode: String) {
-        _activeFileContent.value += "\n" + snippetCode.trimIndent() + "\n"
+        val current = _activeFileContent.value
+        val separator = if (current.isEmpty() || current.endsWith("\n")) "" else "\n"
+        val newContent = current + separator + snippetCode.trimIndent() + "\n"
+        updateActiveFileContent(newContent)
         showSnippetsDialog.value = false
     }
 

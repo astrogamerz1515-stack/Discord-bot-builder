@@ -44,6 +44,9 @@ interface BotFileDao {
     @Query("SELECT * FROM bot_files WHERE projectId = :projectId AND filePath = :filePath LIMIT 1")
     suspend fun getFileByPath(projectId: Long, filePath: String): BotFile?
 
+    @Query("SELECT * FROM bot_files WHERE id = :fileId LIMIT 1")
+    suspend fun getFileById(fileId: Long): BotFile?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFile(file: BotFile): Long
 

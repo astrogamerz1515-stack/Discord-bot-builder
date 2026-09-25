@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -72,6 +74,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BotLanguage
@@ -116,6 +119,12 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     val showGeneratedCodeDialog by viewModel.showGeneratedCodeDialog.collectAsState()
     val generatedCodeText by viewModel.generatedCodeText.collectAsState()
 
+    if (currentTab != AppTab.EDITOR) {
+        BackHandler {
+            viewModel.setTab(AppTab.EDITOR)
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -132,17 +141,19 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Logo & App Name
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { viewModel.showProjectSwitchDialog.value = true }
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                            .clickable { viewModel.showProjectSwitchDialog.value = true }
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(34.dp)
                                 .background(DiscordBlurple, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
@@ -154,14 +165,15 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f, fill = false)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = project?.name ?: "BotStudio",
                                     color = DiscordTextPrimary,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Icon(
                                     imageVector = Icons.Default.ArrowDropDown,
@@ -180,107 +192,139 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                 Text(
                                     text = project?.language ?: "JavaScript",
                                     color = DiscordTextMuted,
-                                    fontSize = 11.sp
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    color = DiscordGreen.copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(3.dp)
-                                ) {
-                                    Text(
-                                        text = "Open Access",
-                                        color = DiscordGreen,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                    )
-                                }
                             }
                         }
                     }
 
-                    // Action buttons
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        // Quick Gradle Button
-                        IconButton(
-                            onClick = { viewModel.setTab(AppTab.GRADLE) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.Build, contentDescription = "Gradle", tint = if (currentTab == AppTab.GRADLE) DiscordBlurple else DiscordTextSecondary, modifier = Modifier.size(18.dp))
-                        }
-
-                        // Quick Extensions Button
-                        IconButton(
-                            onClick = { viewModel.setTab(AppTab.EXTENSIONS) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.Extension, contentDescription = "Extensions", tint = if (currentTab == AppTab.EXTENSIONS) DiscordBlurple else DiscordTextSecondary, modifier = Modifier.size(18.dp))
-                        }
-
-                        // New Project Button
-                        Button(
-                            onClick = { viewModel.showNewProjectDialog.value = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
-                            shape = RoundedCornerShape(6.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("btn_top_new_project")
-                        ) {
-                            Icon(imageVector = Icons.Default.Add, contentDescription = "New Project", tint = DiscordTextPrimary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("New Bot", color = DiscordTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
+                    // Prominent, un-overlapped New Project Action Button
+                    Button(
+                        onClick = { viewModel.showNewProjectDialog.value = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("btn_top_new_project")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Project",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "New Bot",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
-                // Sub-header Scrollable Tab Strip for direct access to all tabs
+                // Sub-header Tab Strip containing tabs (Editor, Terminal, Simulator...) AND pinned high-visibility "+ New Bot" button
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(DiscordBackground)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AppTab.values().forEach { tab ->
-                        val isSelected = currentTab == tab
-                        Surface(
-                            color = if (isSelected) DiscordBlurple else DiscordDarker,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.clickable { viewModel.setTab(tab) }
+                    // Pinned high-visibility New Bot button directly in the upper tab strip
+                    Surface(
+                        color = DiscordGreen,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .heightIn(min = 32.dp)
+                            .clickable { viewModel.showNewProjectDialog.value = true }
+                            .testTag("btn_tab_new_bot")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Create New Bot",
+                                tint = Color.Black,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "New Bot",
+                                color = Color.Black,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Subtle separator line
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(20.dp)
+                            .background(DiscordHover)
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Scrollable tabs strip containing Editor, Terminal, Simulator, etc.
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppTab.values().forEach { tab ->
+                            val isSelected = currentTab == tab
+                            Surface(
+                                color = if (isSelected) DiscordBlurple else DiscordDarker,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 32.dp)
+                                    .clickable { viewModel.setTab(tab) }
+                                    .testTag("top_tab_${tab.name.lowercase()}")
                             ) {
-                                val icon = when (tab) {
-                                    AppTab.EDITOR -> Icons.Default.Code
-                                    AppTab.TERMINAL -> Icons.Default.Terminal
-                                    AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat
-                                    AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize
-                                    AppTab.STORAGE -> Icons.Default.Storage
-                                    AppTab.EXTENSIONS -> Icons.Default.Extension
-                                    AppTab.GRADLE -> Icons.Default.Build
-                                    AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome
-                                    AppTab.API_KEYS -> Icons.Default.Key
-                                    AppTab.PACKAGES -> Icons.Default.Extension
-                                    AppTab.BOT_CONFIG -> Icons.Default.Settings
-                                    AppTab.DEPLOY -> Icons.Default.CloudUpload
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val icon = when (tab) {
+                                        AppTab.EDITOR -> Icons.Default.Code
+                                        AppTab.TERMINAL -> Icons.Default.Terminal
+                                        AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat
+                                        AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize
+                                        AppTab.STORAGE -> Icons.Default.Storage
+                                        AppTab.EXTENSIONS -> Icons.Default.Extension
+                                        AppTab.GRADLE -> Icons.Default.Build
+                                        AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome
+                                        AppTab.API_KEYS -> Icons.Default.Key
+                                        AppTab.PACKAGES -> Icons.Default.Extension
+                                        AppTab.BOT_CONFIG -> Icons.Default.Settings
+                                        AppTab.DEPLOY -> Icons.Default.CloudUpload
+                                    }
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = if (isSelected) Color.White else DiscordTextSecondary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = tab.title,
+                                        color = if (isSelected) Color.White else DiscordTextSecondary,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
                                 }
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = if (isSelected) Color.White else DiscordTextSecondary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = tab.title,
-                                    color = if (isSelected) Color.White else DiscordTextSecondary,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
                             }
                         }
                     }
@@ -288,16 +332,12 @@ fun MainScreen(viewModel: BotStudioViewModel) {
             }
         },
         bottomBar = {
-            // M3 Bottom Navigation Bar
+            // M3 Bottom Navigation Bar with 5 primary destinations for optimal ergonomic touch targets
             val bottomTabs = listOf(
                 AppTab.EDITOR,
                 AppTab.TERMINAL,
                 AppTab.SIMULATOR,
                 AppTab.EMBED_BUILDER,
-                AppTab.STORAGE,
-                AppTab.EXTENSIONS,
-                AppTab.GRADLE,
-                AppTab.AI_ASSISTANT,
                 AppTab.BOT_CONFIG
             )
             NavigationBar(
@@ -532,8 +572,22 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.showProjectSwitchDialog.value = false }) {
-                    Text("Close", color = DiscordTextSecondary)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            viewModel.showProjectSwitchDialog.value = false
+                            viewModel.showNewProjectDialog.value = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Project", fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { viewModel.showProjectSwitchDialog.value = false }) {
+                        Text("Close", color = DiscordTextSecondary)
+                    }
                 }
             }
         )

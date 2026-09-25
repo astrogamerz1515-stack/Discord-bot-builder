@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -118,6 +120,12 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     // Synchronize TextFieldValue with file content and track cursor
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(fileContent, TextRange(fileContent.length)))
+    }
+
+    // Reset textFieldValue whenever active file changes to the new file's content
+    LaunchedEffect(activeFile?.id) {
+        val currentContent = viewModel.activeFileContent.value
+        textFieldValue = TextFieldValue(currentContent, TextRange(0))
     }
 
     LaunchedEffect(fileContent) {
@@ -237,12 +245,13 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp),
                         border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, DiscordHover) else null,
                         modifier = Modifier
+                            .heightIn(min = 34.dp)
                             .clickable { viewModel.selectFile(file) }
                             .testTag("tab_file_${file.filePath}")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                         ) {
                             Surface(
                                 color = badgeColor.copy(alpha = 0.2f),
@@ -399,14 +408,16 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             Surface(
                 color = DiscordHover,
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.clickable {
-                    val formatted = formatSourceCode(textFieldValue.text)
-                    viewModel.updateActiveFileContent(formatted)
-                    textFieldValue = TextFieldValue(formatted, TextRange(formatted.length))
-                }
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable {
+                        val formatted = formatSourceCode(textFieldValue.text, activeFile?.filePath ?: "")
+                        viewModel.updateActiveFileContent(formatted)
+                        textFieldValue = TextFieldValue(formatted, TextRange(formatted.length))
+                    }
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -429,63 +440,77 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             Surface(
                 color = DiscordElevated,
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.clickable { moveCursor(-1) }
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { moveCursor(-1) }
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Cursor Left",
-                    tint = DiscordTextPrimary,
-                    modifier = Modifier
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .size(14.dp)
-                )
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Cursor Left",
+                        tint = DiscordTextPrimary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
 
             Surface(
                 color = DiscordElevated,
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.clickable { moveCursor(1) }
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { moveCursor(1) }
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Cursor Right",
-                    tint = DiscordTextPrimary,
-                    modifier = Modifier
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .size(14.dp)
-                )
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Cursor Right",
+                        tint = DiscordTextPrimary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
 
             // Indent Tab button (2 spaces)
             Surface(
                 color = DiscordElevated,
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.clickable { insertAtCursor("  ") }
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { insertAtCursor("  ") }
             ) {
-                Text(
-                    text = "Tab",
-                    color = DiscordTextPrimary,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Text(
+                        text = "Tab",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
-            // Quick Insertion characters
+            // Quick Insertion characters with generous touch area
             listOf("(", ")", "{", "}", "[", "]", "=>", ";", "\"", "'", "`", ":", "=", "+", "$", ".").forEach { symbol ->
                 Surface(
                     color = DiscordElevated,
                     shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier.clickable { insertAtCursor(symbol) }
+                    modifier = Modifier
+                        .heightIn(min = 32.dp)
+                        .widthIn(min = 32.dp)
+                        .clickable { insertAtCursor(symbol) }
                 ) {
-                    Text(
-                        text = symbol,
-                        color = DiscordTextPrimary,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = symbol,
+                            color = DiscordTextPrimary,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             }
 
@@ -985,7 +1010,24 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     }
 }
 
-fun formatSourceCode(rawCode: String): String {
+fun formatSourceCode(rawCode: String, filePath: String = ""): String {
+    val ext = filePath.substringAfterLast('.', "").lowercase()
+    if (ext == "json") {
+        return try {
+            org.json.JSONObject(rawCode).toString(2)
+        } catch (_: Exception) {
+            try {
+                org.json.JSONArray(rawCode).toString(2)
+            } catch (_: Exception) {
+                rawCode
+            }
+        }
+    }
+    if (ext == "py") {
+        // In Python, do not manipulate indentation based on braces; trim trailing whitespace and preserve block structure
+        return rawCode.lines().joinToString("\n") { it.trimEnd() }.trimEnd()
+    }
+
     val lines = rawCode.lines()
     val formatted = StringBuilder()
     var indentLevel = 0
@@ -999,14 +1041,18 @@ fun formatSourceCode(rawCode: String): String {
         }
 
         // Check if line closes block
-        if (trimmed.startsWith("}") || trimmed.startsWith(")") || trimmed.startsWith("]")) {
+        if (trimmed.startsWith("}") || trimmed.startsWith(")") || trimmed.startsWith("]") ||
+            trimmed.startsWith("};") || trimmed.startsWith("});") || trimmed.startsWith("]);")
+        ) {
             indentLevel = (indentLevel - 1).coerceAtLeast(0)
         }
 
         formatted.append(indent.repeat(indentLevel)).append(trimmed).append("\n")
 
         // Check if line opens block
-        if (trimmed.endsWith("{") || trimmed.endsWith("(") || trimmed.endsWith("[")) {
+        val opens = trimmed.endsWith("{") || trimmed.endsWith("(") || trimmed.endsWith("[")
+        val closes = trimmed.startsWith("}") || trimmed.startsWith(")") || trimmed.startsWith("]")
+        if (opens && !closes) {
             indentLevel++
         }
     }
