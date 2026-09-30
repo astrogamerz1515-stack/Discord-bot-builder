@@ -113,16 +113,90 @@ class BotRuntimeEngine(
         currentProjectId = projectId
     }
 
-    /**
-     * Checks if a bot token looks like a real Discord bot token.
-     */
-    fun isRealToken(token: String): Boolean {
-        val trimmed = token.trim()
-        return trimmed.isNotBlank() &&
-                !trimmed.contains("DiscordSecretBotToken") &&
-                !trimmed.contains("G-DiscordSecret") &&
-                trimmed.length >= 35 &&
-                trimmed.contains(".")
+    fun sanitizeToken(raw: String): String = Companion.sanitizeToken(raw)
+    fun diagnoseToken(raw: String): String? = Companion.diagnoseToken(raw)
+    fun isRealToken(token: String): Boolean = Companion.isRealToken(token)
+
+    companion object {
+        /**
+         * Cleans and sanitizes a raw user-entered Discord token.
+         * Removes wrapping quotes, "Bot " prefix, "Bearer " prefix, variable assignments,
+         * non-breaking spaces, and any extraneous whitespace.
+         */
+        fun sanitizeToken(raw: String): String {
+            var t = raw.trim()
+                .replace("\u00A0", "") // non-breaking space
+                .replace("\u200B", "") // zero-width space
+                .replace("\r", "")
+                .replace("\n", "")
+                .replace("\t", "")
+                .trim()
+
+            // Remove wrapping quotes (single, double, smart quotes, backticks)
+            if ((t.startsWith("\"") && t.endsWith("\"")) ||
+                (t.startsWith("'") && t.endsWith("'")) ||
+                (t.startsWith("`") && t.endsWith("`")) ||
+                (t.startsWith("“") && t.endsWith("”"))) {
+                t = t.substring(1, t.length - 1).trim()
+            }
+
+            // Remove "Bot " or "Bearer " prefix if user included it
+            val prefixes = listOf("Bot ", "bot ", "Bearer ", "bearer ", "Token ", "token ")
+            for (p in prefixes) {
+                if (t.startsWith(p)) {
+                    t = t.substring(p.length).trim()
+                    break
+                }
+            }
+
+            // If user pasted an assignment like DISCORD_TOKEN=xyz or token = 'xyz'
+            if (t.contains("=")) {
+                t = t.substringAfter("=").trim()
+                if ((t.startsWith("\"") && t.endsWith("\"")) ||
+                    (t.startsWith("'") && t.endsWith("'")) ||
+                    (t.startsWith("`") && t.endsWith("`"))) {
+                    t = t.substring(1, t.length - 1).trim()
+                }
+            }
+
+            return t.trim()
+        }
+
+        /**
+         * Diagnoses common mistakes when users enter Discord tokens, providing friendly guidance.
+         */
+        fun diagnoseToken(raw: String): String? {
+            val t = sanitizeToken(raw)
+            if (t.isBlank()) return "Please enter your Discord Bot Token."
+            if (t.contains("DiscordSecretBotToken") || t.contains("G-DiscordSecret")) {
+                return "⚠️ This is a placeholder token. Go to Discord Developer Portal -> Bot -> 'Reset Token' to generate your real Bot Token."
+            }
+            if (t.all { it.isDigit() } && t.length in 15..23) {
+                return "⚠️ You entered an Application / Client ID (${t.length} digits), not a Bot Token! Go to the 'Bot' tab on the left in Discord Developer Portal, click 'Reset Token', and copy the bot token."
+            }
+            if (!t.contains(".") && t.length == 32 && t.all { it.isLetterOrDigit() }) {
+                return "⚠️ You entered a Client Secret (32 chars), not a Bot Token! In Discord Developer Portal, click the 'Bot' tab on the left sidebar, click 'Reset Token', and copy that token."
+            }
+            if (!t.contains(".") && t.length == 64 && t.all { it.isLetterOrDigit() }) {
+                return "⚠️ You entered a Public Key (64 chars), not a Bot Token! In Developer Portal, go to 'Bot' tab -> 'Reset Token'."
+            }
+            if (!t.contains(".") && t.length < 50) {
+                return "⚠️ Discord Bot Tokens contain dots separating parts (e.g. ID.Timestamp.Secret). Check the 'Bot' tab in Discord Developer Portal."
+            }
+            return null
+        }
+
+        /**
+         * Checks if a bot token looks like a real Discord bot token.
+         */
+        fun isRealToken(token: String): Boolean {
+            val t = sanitizeToken(token)
+            return t.isNotBlank() &&
+                    !t.contains("DiscordSecretBotToken") &&
+                    !t.contains("G-DiscordSecret") &&
+                    t.length >= 35 &&
+                    t.contains(".")
+        }
     }
 
     /**
@@ -138,7 +212,8 @@ class BotRuntimeEngine(
         _isRunning.value = true
         lastSequence = null
 
-        val hasRealToken = isRealToken(project.botToken)
+        val cleanToken = sanitizeToken(project.botToken)
+        val hasRealToken = isRealToken(cleanToken)
 
         scope.launch(Dispatchers.IO) {
             repository.addTerminalLog(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
@@ -290,10 +365,11 @@ class BotRuntimeEngine(
         if (project.intentGuildMembers) intents = intents or 2
         if (project.intentPresences) intents = intents or 256
 
+        val cleanToken = sanitizeToken(project.botToken)
         val identifyPayload = JSONObject().apply {
             put("op", 2)
             put("d", JSONObject().apply {
-                put("token", project.botToken.trim())
+                put("token", cleanToken)
                 put("intents", intents)
                 put("properties", JSONObject().apply {
                     put("os", "android")
@@ -499,7 +575,7 @@ class BotRuntimeEngine(
             val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
                 .url("https://discord.com/api/v10/channels/$channelId/messages")
-                .header("Authorization", "Bot ${project.botToken.trim()}")
+                .header("Authorization", "Bot ${sanitizeToken(project.botToken)}")
                 .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
                 .post(requestBody)
                 .build()
@@ -609,7 +685,7 @@ class BotRuntimeEngine(
             val requestBody = commandsArray.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
                 .url("https://discord.com/api/v10/applications/${project.clientId}/commands")
-                .header("Authorization", "Bot ${project.botToken.trim()}")
+                .header("Authorization", "Bot ${sanitizeToken(project.botToken)}")
                 .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
                 .put(requestBody)
                 .build()
@@ -626,15 +702,17 @@ class BotRuntimeEngine(
     /**
      * Verifies a bot token by calling GET https://discord.com/api/v10/users/@me
      */
-    suspend fun verifyDiscordToken(token: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        if (!isRealToken(token)) {
-            return@withContext false to "Please enter a valid Discord Bot Token (format: <id>.<secret>.<hash>)."
+    suspend fun verifyDiscordToken(rawToken: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val token = sanitizeToken(rawToken)
+        val diag = diagnoseToken(token)
+        if (diag != null) {
+            return@withContext false to diag
         }
 
         try {
             val request = Request.Builder()
                 .url("https://discord.com/api/v10/users/@me")
-                .header("Authorization", "Bot ${token.trim()}")
+                .header("Authorization", "Bot $token")
                 .header("User-Agent", "DiscordBot (https://github.com/aistudio, 1.0.0)")
                 .get()
                 .build()
@@ -650,7 +728,7 @@ class BotRuntimeEngine(
                 val discriminator = json.optString("discriminator", "0000")
                 true to "✅ Verified! Bot: $username#$discriminator (ID: $id)"
             } else if (code == 401) {
-                false to "❌ 401 Unauthorized: Invalid Bot Token. Please copy the fresh token from Discord Developer Portal."
+                false to "❌ 401 Unauthorized: Invalid Discord Bot Token. In Discord Developer Portal, open your bot -> 'Bot' tab -> click 'Reset Token' and copy the fresh token."
             } else {
                 false to "❌ Discord API returned HTTP $code: $body"
             }

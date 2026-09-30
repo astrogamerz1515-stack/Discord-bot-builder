@@ -66,4 +66,27 @@ class BotExecutionTest {
         assertTrue(result.isHandled)
         assertTrue(result.replyText.contains("Pong"))
     }
+
+    @Test
+    fun testTokenSanitization() {
+        val rawWithQuotes = "\"MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_\""
+        assertEquals("MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_", com.example.engine.BotRuntimeEngine.sanitizeToken(rawWithQuotes))
+
+        val rawWithBotPrefix = "Bot MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_ "
+        assertEquals("MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_", com.example.engine.BotRuntimeEngine.sanitizeToken(rawWithBotPrefix))
+
+        val rawWithEnv = "DISCORD_TOKEN = 'MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_'"
+        assertEquals("MTIzNDU2Nzg5MDEyMzQ1Ng.Gxyz12.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_", com.example.engine.BotRuntimeEngine.sanitizeToken(rawWithEnv))
+    }
+
+    @Test
+    fun testTokenDiagnosis() {
+        // 32 chars hex = Client Secret
+        val secretDiag = com.example.engine.BotRuntimeEngine.diagnoseToken("a1b2c3d4e5f67890a1b2c3d4e5f67890")
+        assertTrue(secretDiag != null && secretDiag.contains("Client Secret"))
+
+        // 18 digits = App ID
+        val appIdDiag = com.example.engine.BotRuntimeEngine.diagnoseToken("118923456789012345")
+        assertTrue(appIdDiag != null && appIdDiag.contains("Application / Client ID"))
+    }
 }

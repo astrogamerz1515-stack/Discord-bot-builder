@@ -61,13 +61,16 @@ class BotRepository(
         name: String,
         description: String,
         language: BotLanguage,
-        prefix: String
+        prefix: String,
+        botToken: String = ""
     ): Long {
+        val finalToken = botToken.trim().ifEmpty { "MTE4OTIzNDU2Nzg5MDEyMzQ1Ng.G-DiscordSecretBotTokenHere" }
         val newProject = BotProject(
             name = name,
             description = description,
             language = language.name,
             prefix = prefix,
+            botToken = finalToken,
             status = "Online",
             activityType = "PLAYING",
             activityText = "$prefix help | ${language.displayName}"

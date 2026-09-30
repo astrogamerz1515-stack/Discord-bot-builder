@@ -556,7 +556,13 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
 
                 OutlinedTextField(
                     value = token,
-                    onValueChange = { token = it },
+                    onValueChange = { input ->
+                        val clean = viewModel.runtimeEngine.sanitizeToken(input)
+                        token = clean
+                        if (clean.isNotBlank()) {
+                            viewModel.updateBotToken(clean)
+                        }
+                    },
                     visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { showToken = !showToken }) {
@@ -576,35 +582,87 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Live Token Diagnosis Warning if user pasted Client Secret / App ID / etc.
+                val liveDiagnosis = remember(token) {
+                    if (token.isNotBlank()) viewModel.runtimeEngine.diagnoseToken(token) else null
+                }
+                val diag = liveDiagnosis
+                if (diag != null) {
+                    Surface(
+                        color = DiscordYellow.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = diag,
+                            color = DiscordYellow,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+
                 // Verify Token Action Button & Result
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = { viewModel.testToken(token) },
-                        enabled = !isVerifyingToken && token.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
-                        shape = RoundedCornerShape(6.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp).testTag("btn_verify_discord_token")
-                    ) {
-                        if (isVerifyingToken) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Testing...", color = Color.White, fontSize = 11.sp)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = {
+                                val clean = viewModel.runtimeEngine.sanitizeToken(token)
+                                token = clean
+                                viewModel.testToken(clean)
+                            },
+                            enabled = !isVerifyingToken && token.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp).testTag("btn_verify_discord_token")
+                        ) {
+                            if (isVerifyingToken) {
+                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", color = Color.White, fontSize = 11.sp)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Verify Token", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        // Paste from Clipboard Button
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    val clean = viewModel.runtimeEngine.sanitizeToken(clip)
+                                    token = clean
+                                    viewModel.updateBotToken(clean)
+                                    viewModel.testToken(clean)
+                                    Toast.makeText(context, "Pasted and saving token...", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordElevated),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp).testTag("btn_paste_token")
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = DiscordTextPrimary, modifier = Modifier.size(13.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Test / Verify Token", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Paste", color = DiscordTextPrimary, fontSize = 11.sp)
                         }
                     }
 
                     if (token.contains("DiscordSecretBotToken") || token.isBlank()) {
                         Text("⚠️ Demo Token", color = DiscordYellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     } else {
-                        Text("🔑 Custom Token", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("🔑 Saved & Active", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 

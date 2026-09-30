@@ -419,6 +419,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
         var newName by remember { mutableStateOf("") }
         var newDesc by remember { mutableStateOf("") }
         var newPrefix by remember { mutableStateOf("!") }
+        var newBotToken by remember { mutableStateOf("") }
         var selectedLang by remember { mutableStateOf(BotLanguage.JAVASCRIPT) }
         var showLangDropdown by remember { mutableStateOf(false) }
 
@@ -479,6 +480,15 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                     )
 
                     OutlinedTextField(
+                        value = newBotToken,
+                        onValueChange = { newBotToken = it },
+                        label = { Text("Discord Bot Token (optional)") },
+                        placeholder = { Text("Paste real bot token from Discord Portal") },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = DiscordTextPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
                         value = newDesc,
                         onValueChange = { newDesc = it },
                         label = { Text("Description (optional)") },
@@ -490,7 +500,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 Button(
                     onClick = {
                         if (newName.isNotBlank()) {
-                            viewModel.createNewProject(newName, newDesc, selectedLang, newPrefix)
+                            viewModel.createNewProject(newName, newDesc, selectedLang, newPrefix, newBotToken)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)

@@ -327,9 +327,16 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         _currentTab.value = tab
     }
 
-    fun createNewProject(name: String, description: String, language: BotLanguage, prefix: String) {
+    fun createNewProject(
+        name: String,
+        description: String,
+        language: BotLanguage,
+        prefix: String,
+        botToken: String = ""
+    ) {
+        val sanitized = runtimeEngine.sanitizeToken(botToken)
         viewModelScope.launch {
-            val newId = repository.createProject(name, description, language, prefix)
+            val newId = repository.createProject(name, description, language, prefix, sanitized)
             val created = repository.getProjectSync(newId)
             if (created != null) {
                 selectProject(created)
@@ -396,14 +403,15 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         intentPresences: Boolean
     ) {
         val current = _currentProject.value ?: return
+        val cleanToken = runtimeEngine.sanitizeToken(token).ifEmpty { current.botToken }
         val updated = current.copy(
             name = name,
             prefix = prefix,
             status = status,
             activityType = activityType,
             activityText = activityText,
-            botToken = token,
-            clientId = clientId,
+            botToken = cleanToken,
+            clientId = clientId.trim(),
             intentMessageContent = intentMessageContent,
             intentGuildMembers = intentGuildMembers,
             intentPresences = intentPresences
@@ -414,23 +422,47 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun updateBotToken(rawToken: String) {
+        val current = _currentProject.value ?: return
+        val sanitized = runtimeEngine.sanitizeToken(rawToken)
+        if (sanitized.isBlank()) return
+        val updated = current.copy(botToken = sanitized)
+        _currentProject.value = updated
+        viewModelScope.launch {
+            repository.updateProject(updated)
+        }
+    }
+
     val tokenVerificationState = MutableStateFlow<String?>(null)
     val isVerifyingToken = MutableStateFlow(false)
 
-    fun testToken(token: String) {
+    fun testToken(rawToken: String) {
+        val sanitized = runtimeEngine.sanitizeToken(rawToken)
         viewModelScope.launch {
             isVerifyingToken.value = true
             tokenVerificationState.value = "Testing token with Discord API..."
-            val (_, message) = runtimeEngine.verifyDiscordToken(token)
+            val (success, message) = runtimeEngine.verifyDiscordToken(sanitized)
             tokenVerificationState.value = message
             isVerifyingToken.value = false
+
+            // If token is verified or non-empty, auto-save to current project
+            if (sanitized.isNotBlank()) {
+                val current = _currentProject.value
+                if (current != null) {
+                    val updated = current.copy(botToken = sanitized)
+                    _currentProject.value = updated
+                    repository.updateProject(updated)
+                }
+            }
         }
     }
 
     fun startBotProcess() {
         val project = _currentProject.value ?: return
         saveActiveFile()
-        runtimeEngine.startBot(project)
+        val cleanToken = runtimeEngine.sanitizeToken(project.botToken)
+        val cleanProject = if (cleanToken != project.botToken) project.copy(botToken = cleanToken) else project
+        runtimeEngine.startBot(cleanProject)
     }
 
     fun stopBotProcess() {
