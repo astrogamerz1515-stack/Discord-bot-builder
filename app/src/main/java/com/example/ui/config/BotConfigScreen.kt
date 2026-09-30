@@ -174,29 +174,45 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                 )
             }
 
-            Button(
-                onClick = {
-                    viewModel.updateProjectSettings(
-                        name = name,
-                        prefix = prefix,
-                        status = status,
-                        activityType = activityType,
-                        activityText = activityText,
-                        token = token,
-                        clientId = clientId,
-                        intentMessageContent = intentMessageContent,
-                        intentGuildMembers = intentGuildMembers,
-                        intentPresences = intentPresences
-                    )
-                    Toast.makeText(context, "Bot configuration saved!", Toast.LENGTH_SHORT).show()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.testTag("btn_save_bot_settings")
-            ) {
-                Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Save", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isRunning) {
+                    Button(
+                        onClick = {
+                            viewModel.hotReload()
+                            Toast.makeText(context, "Hot reloaded code changes!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("btn_hot_reload")
+                    ) {
+                        Text("🔥 Hot Reload", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        viewModel.updateProjectSettings(
+                            name = name,
+                            prefix = prefix,
+                            status = status,
+                            activityType = activityType,
+                            activityText = activityText,
+                            token = token,
+                            clientId = clientId,
+                            intentMessageContent = intentMessageContent,
+                            intentGuildMembers = intentGuildMembers,
+                            intentPresences = intentPresences
+                        )
+                        Toast.makeText(context, "Bot configuration saved!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("btn_save_bot_settings")
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
             }
         }
 
@@ -823,6 +839,157 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
                         onCheckedChange = { intentPresences = it },
                         colors = SwitchDefaults.colors(checkedThumbColor = DiscordGreen)
                     )
+                }
+
+                // 2026 Privileged Verification Warning at 10k users
+                Surface(
+                    color = DiscordYellow.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DiscordYellow.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = DiscordYellow, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Privileged Intent Rules (2026)",
+                                color = DiscordYellow,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                            Text(
+                                text = "Bots in >10,000 servers require verified developer application & mandatory annual re-verification. Enable these in Discord Developer Portal under Bot -> Privileged Gateway Intents.",
+                                color = DiscordTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Per-Guild Command Sync Card (Instant Developer Propagation)
+        var testGuildId by remember { mutableStateOf("") }
+        var guildSyncStatus by remember { mutableStateOf<String?>(null) }
+        var isSyncingGuild by remember { mutableStateOf(false) }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Build, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Instant Slash Command Sync (Dev Guild)", color = DiscordTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Text(
+                    text = "Global commands take up to 1 hour to propagate. Use your test server ID below for instant (0-delay) command registration during development!",
+                    color = DiscordTextSecondary,
+                    fontSize = 11.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = testGuildId,
+                        onValueChange = { testGuildId = it },
+                        label = { Text("Test Guild ID") },
+                        placeholder = { Text("e.g. 118923456789012345") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = DiscordBlurple,
+                            unfocusedBorderColor = DiscordHover,
+                            focusedTextColor = DiscordTextPrimary,
+                            unfocusedTextColor = DiscordTextPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Button(
+                        onClick = {
+                            if (testGuildId.isBlank()) {
+                                Toast.makeText(context, "Please enter a Guild ID", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            isSyncingGuild = true
+                            guildSyncStatus = "Syncing commands..."
+                            viewModel.syncGuildCommands(testGuildId) { success, msg ->
+                                isSyncingGuild = false
+                                guildSyncStatus = msg
+                            }
+                        },
+                        enabled = !isSyncingGuild,
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(if (isSyncingGuild) "Syncing..." else "Sync", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+
+                if (guildSyncStatus != null) {
+                    Text(
+                        text = guildSyncStatus!!,
+                        color = if (guildSyncStatus!!.contains("✅")) DiscordGreen else DiscordRed,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+
+        // Voice Connection & DAVE E2EE Card (Mandatory March 2026)
+        val isDaveActive by viewModel.isDaveActive.collectAsState()
+        val voiceState by viewModel.voiceConnectionState.collectAsState()
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Security, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Voice Gateway & DAVE Protocol (E2EE)", color = DiscordTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Text(
+                    text = "Discord REQUIRES DAVE Protocol for all non-stage voice as of March 2026. Without DAVE, connections fail with close code 4017.",
+                    color = DiscordTextSecondary,
+                    fontSize = 11.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "DAVE End-to-End Encryption: ${if (isDaveActive) "ACTIVE (MLS v1)" else "STANDBY"}",
+                            color = if (isDaveActive) DiscordGreen else DiscordTextMuted,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "State: $voiceState • Code 4017 Protection: Enabled",
+                            color = DiscordTextSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
         }

@@ -24,10 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.FloatingActionButton
@@ -291,6 +291,7 @@ fun HomeScreen(
                             "＋ New Bot" -> onCreateBotClick()
                             "<> Editor" -> viewModel?.setTab(AppTab.EDITOR)
                             "▶ Simulator" -> viewModel?.setTab(AppTab.SIMULATOR)
+                            "🧩 Visual Builder" -> viewModel?.setTab(AppTab.VISUAL_BUILDER)
                         }
                     }
                 )
@@ -478,6 +479,13 @@ fun HomeChipRow(
             defaultTextColor = DiscordBotColors.OnSurfaceVariant,
             isBold = false,
             border = BorderStroke(1.dp, DiscordBotColors.Border)
+        ),
+        ChipSpec(
+            label = "🧩 Visual Builder",
+            defaultBg = DiscordBotColors.Purple,
+            defaultTextColor = Color.White,
+            isBold = false,
+            border = null
         )
     )
 
@@ -802,7 +810,7 @@ fun HomeBottomNavigationBar(
             ) {
                 val navItems = listOf(
                     Triple(Icons.Default.Home, "Home", "Home"),
-                    Triple(Icons.Default.MenuBook, "Templates", "Templates"),
+                    Triple(Icons.AutoMirrored.Filled.MenuBook, "Templates", "Templates"),
                     Triple(Icons.Default.Settings, "Settings", "Settings")
                 )
 

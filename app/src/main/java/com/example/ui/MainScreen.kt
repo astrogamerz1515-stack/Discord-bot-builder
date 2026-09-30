@@ -91,6 +91,7 @@ import com.example.ui.install.PackageInstallScreen
 import com.example.ui.simulator.DiscordSimulatorScreen
 import com.example.ui.storage.AdvancedStorageScreen
 import com.example.ui.terminal.TerminalScreen
+import com.example.ui.visualbuilder.VisualBuilderScreen
 import com.example.ui.theme.DiscordBackground
 import com.example.ui.theme.DiscordBlurple
 import com.example.ui.theme.DiscordDarker
@@ -299,6 +300,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                 ) {
                                     val icon = when (tab) {
                                         AppTab.EDITOR -> Icons.Default.Code
+                                        AppTab.VISUAL_BUILDER -> Icons.Default.Extension
                                         AppTab.TERMINAL -> Icons.Default.Terminal
                                         AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat
                                         AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize
@@ -349,6 +351,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                     val isSelected = currentTab == tab
                     val (icon, label) = when (tab) {
                         AppTab.EDITOR -> Icons.Default.Code to "Editor"
+                        AppTab.VISUAL_BUILDER -> Icons.Default.Extension to "Visual"
                         AppTab.TERMINAL -> Icons.Default.Terminal to "Terminal"
                         AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat to "Simulator"
                         AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize to "Embeds"
@@ -399,6 +402,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
         ) {
             when (currentTab) {
                 AppTab.EDITOR -> CodeEditorScreen(viewModel)
+                AppTab.VISUAL_BUILDER -> VisualBuilderScreen(onNavigateBack = { viewModel.setTab(AppTab.EDITOR) })
                 AppTab.TERMINAL -> TerminalScreen(viewModel)
                 AppTab.SIMULATOR -> DiscordSimulatorScreen(viewModel)
                 AppTab.EMBED_BUILDER -> VisualEmbedDesignerScreen(viewModel)

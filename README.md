@@ -13,6 +13,9 @@ This repository includes a ready-to-run GitHub Actions workflow (`.github/workfl
 2. In your GitHub repository, navigate to the **Actions** tab.
 3. Select **Build Android APK** and click **Run workflow** (or simply push to `main` / `master`).
 4. Once completed, download the generated APK (`BotStudio-debug-apk.zip`) from the **Artifacts** section at the bottom of the run summary.
+ 
+ # join my discord -
+ https://discord.gg/krEBKByEYu
 
 ---
 

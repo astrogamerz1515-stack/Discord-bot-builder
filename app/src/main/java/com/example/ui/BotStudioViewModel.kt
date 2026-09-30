@@ -25,6 +25,7 @@ import java.util.Locale
 
 enum class AppTab(val title: String, val iconName: String) {
     EDITOR("Editor", "code"),
+    VISUAL_BUILDER("Visual Builder", "extension"),
     TERMINAL("Terminal", "terminal"),
     SIMULATOR("Discord Simulator", "chat"),
     EMBED_BUILDER("Embed Designer", "dashboard_customize"),
@@ -474,6 +475,24 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val project = _currentProject.value ?: return
         saveActiveFile()
         runtimeEngine.restartBot(project)
+    }
+
+    val gatewayStatus: StateFlow<com.example.engine.GatewayStatus> = runtimeEngine.gatewayStatus
+    val voiceConnectionState = runtimeEngine.voiceEngine.connectionState
+    val isDaveActive = runtimeEngine.voiceEngine.isDaveActive
+
+    fun hotReload() {
+        val project = _currentProject.value ?: return
+        saveActiveFile()
+        runtimeEngine.hotReload(project.id)
+    }
+
+    fun syncGuildCommands(guildId: String, onResult: (Boolean, String) -> Unit = { _, _ -> }) {
+        val project = _currentProject.value ?: return
+        viewModelScope.launch {
+            val (success, msg) = runtimeEngine.syncGuildCommands(project, guildId)
+            onResult(success, msg)
+        }
     }
 
     fun setTerminalInput(input: String) {
