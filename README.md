@@ -24,11 +24,14 @@
 
 ---
 
-### 2. 📱 Android Background Service & WakeLock (Continuous 24/7 Hosting)
-- **Foreground Service Integration**: When you tap **Run**, the bot automatically launches as an Android Foreground Service (`BotBackgroundService`).
-- **Survives App Minimizing & Screen Sleep**: Employs a low-power CPU `WakeLock` (`PARTIAL_WAKE_LOCK`), preventing Android from terminating the WebSocket connection when you lock your device or switch to Discord.
-- **Persistent Notification**: Shows a sleek ongoing notification with your bot's name, online status, Gateway latency, and a one-tap **Stop Bot** button.
-- **Automatic WakeLock Cleanup**: Safely releases system resources and terminates notifications when the bot is stopped.
+### 2. 📱 Android Background Service & 24/7 Hosting (Even When App/Phone is Closed)
+- **Decoupled Application-Level Runtime**: The bot runtime runs inside a persistent `BotRuntimeManager.applicationScope` rather than an ephemeral `viewModelScope`. Closing the app or finishing activities does **not** terminate your bot's WebSocket or heartbeat loops!
+- **Foreground Service Daemon**: When you tap **Run**, the bot automatically launches as an Android Foreground Service (`BotBackgroundService`) returning `START_STICKY`.
+- **Survives App Closure & Swiping from Recents**: Implements `onTaskRemoved()`. When you swipe away BotStudio from Recents or close the app, the foreground service keeps the Discord Gateway connection streaming with zero downtime.
+- **Survives Screen Sleep & Phone Lock**: Employs a low-power CPU `WakeLock` (`PARTIAL_WAKE_LOCK`) combined with a high-performance `WifiLock` (`WIFI_MODE_FULL_HIGH_PERF`), preventing Android from sleeping the CPU or throttling Wi-Fi radios when your phone screen turns off.
+- **Auto-Restart on Phone Reboot**: Built-in `BootCompletedReceiver` automatically detects if a bot was active and re-launches the bot service immediately when your device reboots.
+- **Persistent Notification with Live Latency**: Shows a sleek ongoing notification displaying your bot's name, online state, live Gateway ping, and a one-tap **Stop Bot** action.
+- **Unrestricted Battery Settings Shortcut**: Quick one-tap setting helper to exempt BotStudio from Android Doze restrictions.
 
 ---
 

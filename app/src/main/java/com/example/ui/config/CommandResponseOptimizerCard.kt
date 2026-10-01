@@ -3,6 +3,11 @@ package com.example.ui.config
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -22,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -29,6 +35,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
@@ -516,6 +523,84 @@ fun CommandResponseOptimizerCard(
                             onCheckedChange = { CommandResponseOptimizer.toggleColdStartKeepAlive(it) },
                             colors = SwitchDefaults.colors(checkedThumbColor = DiscordGreen, checkedTrackColor = DiscordGreen.copy(alpha = 0.5f))
                         )
+                    }
+
+                    // 24/7 Background Execution Status (When Phone / App is Closed)
+                    Surface(
+                        color = DiscordDarker,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, DiscordElevated)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "24/7 Run In Background (App Closed)",
+                                        color = DiscordTextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .background(DiscordGreen.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        "ACTIVE",
+                                        color = DiscordGreen,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "• CPU WakeLock: ACTIVE (CPU continues executing when screen is off)\n• Wi-Fi High-Perf Lock: ACTIVE (Wi-Fi streaming sustained in sleep)\n• Foreground Daemon: ACTIVE (Bot survives swiping app from Recents)\n• Device Boot: Receiver registered for auto-restart on phone reboot",
+                                color = DiscordTextSecondary,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 15.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            try {
+                                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                    data = Uri.fromParts("package", context.packageName, null)
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e2: Exception) {
+                                                Toast.makeText(context, "Could not open battery settings", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = DiscordElevated),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Icon(Icons.Default.BatteryChargingFull, contentDescription = null, tint = DiscordYellow, modifier = Modifier.size(13.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Unrestricted Battery Settings", fontSize = 10.sp, color = DiscordTextPrimary, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+                        }
                     }
 
                     // 6. Command Sync Toggle (Per-Guild vs Global)

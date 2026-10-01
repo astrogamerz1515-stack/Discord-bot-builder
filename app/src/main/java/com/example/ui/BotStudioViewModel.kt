@@ -54,7 +54,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         database.botKeyValueDao()
     )
 
-    val runtimeEngine = BotRuntimeEngine(repository, viewModelScope)
+    val runtimeEngine = com.example.engine.BotRuntimeManager.getEngine(repository)
 
     val allProjects: StateFlow<List<BotProject>> = repository.allProjects
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
