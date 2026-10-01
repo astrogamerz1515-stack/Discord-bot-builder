@@ -129,6 +129,9 @@ A no-code, block-based coding canvas specifically engineered for Discord bot log
 
 ## 📦 Building the APK
 
+### join discord - [GAMERZ Realme](https://discord.gg/krEBKByEYu)
+for the apk
+
 ### 1. Using GitHub Actions (Automated CI/CD)
 This repository includes a ready-to-run GitHub Actions workflow (`.github/workflows/build-apk.yml`).
 
