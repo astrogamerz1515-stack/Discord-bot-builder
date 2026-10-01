@@ -326,6 +326,8 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
         }
 
         // Quick Navigation to AI Models & Keys Pool
+        CommandResponseOptimizerCard(viewModel)
+
         Card(
             colors = CardDefaults.cardColors(containerColor = DiscordSurface),
             shape = RoundedCornerShape(8.dp),

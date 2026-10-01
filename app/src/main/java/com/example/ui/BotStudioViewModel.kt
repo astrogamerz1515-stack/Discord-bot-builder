@@ -160,6 +160,11 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     private var diagnosticsJob: Job? = null
 
     init {
+        com.example.engine.CommandResponseOptimizer.startMonitoring(viewModelScope)
+        com.example.service.BotBackgroundService.onServiceStopListener = {
+            stopBotProcess()
+        }
+
         viewModelScope.launch {
             allProjects.collect { projects ->
                 if (_currentProject.value == null && projects.isNotEmpty()) {
@@ -464,11 +469,25 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val cleanToken = runtimeEngine.sanitizeToken(project.botToken)
         val cleanProject = if (cleanToken != project.botToken) project.copy(botToken = cleanToken) else project
         runtimeEngine.startBot(cleanProject)
+
+        // Run bot in background with Foreground Service and WakeLock
+        try {
+            com.example.service.BotBackgroundService.start(getApplication(), project.id, project.name)
+        } catch (e: Exception) {
+            // Service startup fallback
+        }
     }
 
     fun stopBotProcess() {
         val project = _currentProject.value ?: return
         runtimeEngine.stopBot(project.id)
+
+        // Stop background service
+        try {
+            com.example.service.BotBackgroundService.stop(getApplication())
+        } catch (e: Exception) {
+            // Ignore
+        }
     }
 
     fun restartBotProcess() {
