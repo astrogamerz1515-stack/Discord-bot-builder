@@ -79,7 +79,17 @@ data class BlockTemplate(
     val defaultSlashDesc: String = "Responds with bot latency",
     val defaultPermission: String = "Administrator",
     val defaultVarName: String = "user_points",
-    val defaultVarVal: String = "10"
+    val defaultVarVal: String = "10",
+    val defaultButtonLabel: String = "Click Me",
+    val defaultButtonCustomId: String = "btn_action_1",
+    val defaultSelectCustomId: String = "menu_select_1",
+    val defaultModalCustomId: String = "modal_form_1",
+    val defaultCronSchedule: String = "0 * * * *",
+    val defaultDiscordObjectType: String = "User",
+    val defaultObjectProperty: String = "tag",
+    val defaultHttpMethod: String = "GET",
+    val defaultHttpUrl: String = "https://api.github.com/zen",
+    val defaultJsonPath: String = "data.message"
 )
 
 /**
@@ -98,19 +108,29 @@ object PaletteCatalog {
         BlockCategory.EVENT to listOf(
             BlockTemplate(BlockCategory.EVENT, "When message received", "triggers on any server message", "⚡"),
             BlockTemplate(BlockCategory.EVENT, "When slash command run", "/slash command trigger", "⌨️", defaultSlashName = "ping", defaultSlashDesc = "Check bot status"),
+            BlockTemplate(BlockCategory.EVENT, "When button clicked", "triggers on component click", "🔘", defaultButtonCustomId = "btn_action_1"),
+            BlockTemplate(BlockCategory.EVENT, "When select menu used", "triggers on option selection", "📋", defaultSelectCustomId = "menu_select_1"),
+            BlockTemplate(BlockCategory.EVENT, "When modal submitted", "triggers on modal submit", "📝", defaultModalCustomId = "modal_form_1"),
             BlockTemplate(BlockCategory.EVENT, "When member joins", "triggers on new user join", "👋"),
             BlockTemplate(BlockCategory.EVENT, "When member leaves", "triggers on member leave", "🚪"),
             BlockTemplate(BlockCategory.EVENT, "When reaction added", "triggers on emoji reaction", "⭐"),
-            BlockTemplate(BlockCategory.EVENT, "When button clicked", "triggers on component click", "🔘"),
+            BlockTemplate(BlockCategory.EVENT, "When reaction removed", "triggers when reaction removed", "❌"),
+            BlockTemplate(BlockCategory.EVENT, "On bot ready", "runs once when bot starts up", "🚀"),
+            BlockTemplate(BlockCategory.EVENT, "On scheduled time", "cron-style recurring timer", "⏰", defaultCronSchedule = "0 * * * *"),
             BlockTemplate(BlockCategory.EVENT, "When voice state changes", "joins/leaves voice channel", "🎙️")
         ),
         BlockCategory.MESSAGE to listOf(
             BlockTemplate(BlockCategory.MESSAGE, "Send message", "send text to a channel", "💬", defaultMessage = "Hello from Bot!", defaultChannel = "#general"),
             BlockTemplate(BlockCategory.MESSAGE, "Reply to message", "reply directly to author", "↩️", defaultMessage = "Pong! 🏓"),
             BlockTemplate(BlockCategory.MESSAGE, "Send rich embed", "rich embed card with color & fields", "📋", defaultEmbedTitle = "Server Announcement", defaultChannel = "#announcements"),
+            BlockTemplate(BlockCategory.MESSAGE, "Send with buttons", "action row with interactive buttons", "🔘", defaultButtonLabel = "Click Here", defaultButtonCustomId = "btn_1"),
+            BlockTemplate(BlockCategory.MESSAGE, "Send with select menu", "dropdown menu with choices", "📑", defaultSelectCustomId = "select_roles"),
             BlockTemplate(BlockCategory.MESSAGE, "Send DM to user", "private direct message", "📬", defaultMessage = "Welcome to our server!", defaultUser = "Author"),
+            BlockTemplate(BlockCategory.MESSAGE, "Edit message", "update previously sent message", "✏️", defaultMessage = "Updated content"),
+            BlockTemplate(BlockCategory.MESSAGE, "Delete message", "delete the triggering message", "🗑️"),
+            BlockTemplate(BlockCategory.MESSAGE, "Pin message", "pin message to channel header", "📌"),
             BlockTemplate(BlockCategory.MESSAGE, "Add reaction", "react with emoji to message", "✨", defaultEmoji = "✅"),
-            BlockTemplate(BlockCategory.MESSAGE, "Delete message", "delete the triggering message", "🗑️")
+            BlockTemplate(BlockCategory.MESSAGE, "Send typing indicator", "show bot is typing in channel", "⏳", defaultChannel = "#general")
         ),
         BlockCategory.ACTION to listOf(
             BlockTemplate(BlockCategory.ACTION, "Add role", "assign role to user", "🏷️", defaultRole = "Member", defaultUser = "Author"),
@@ -118,22 +138,52 @@ object PaletteCatalog {
             BlockTemplate(BlockCategory.ACTION, "Timeout user", "mute user temporarily", "⏱️", defaultUser = "Author", defaultWait = 10),
             BlockTemplate(BlockCategory.ACTION, "Kick user", "kick user from server", "👢", defaultUser = "Author"),
             BlockTemplate(BlockCategory.ACTION, "Ban user", "ban user from server", "🔨", defaultUser = "Author"),
+            BlockTemplate(BlockCategory.ACTION, "Unban user", "remove ban by user ID", "🕊️", defaultUser = "Author"),
             BlockTemplate(BlockCategory.ACTION, "Create channel", "create new channel", "📁", defaultChannel = "ticket-01"),
+            BlockTemplate(BlockCategory.ACTION, "Delete channel", "remove target channel", "🗑️", defaultChannel = "temp-channel"),
+            BlockTemplate(BlockCategory.ACTION, "Create thread", "start public or private thread", "🧵", defaultChannel = "discussion"),
+            BlockTemplate(BlockCategory.ACTION, "Lock channel", "prevent members from typing", "🔒", defaultChannel = "#general"),
+            BlockTemplate(BlockCategory.ACTION, "Unlock channel", "restore chat permissions", "🔓", defaultChannel = "#general"),
+            BlockTemplate(BlockCategory.ACTION, "Move member to voice", "drag member to voice channel", "🔊", defaultUser = "Author"),
             BlockTemplate(BlockCategory.ACTION, "Change nickname", "rename user in server", "✏️", defaultUser = "Author")
         ),
         BlockCategory.LOGIC to listOf(
             BlockTemplate(BlockCategory.LOGIC, "If ... then", "conditional branch", "🔀", isContainer = true, defaultConditionField = "message.content", defaultConditionOp = "==", defaultConditionVal = "!ping"),
             BlockTemplate(BlockCategory.LOGIC, "Wait ... seconds", "pause execution asynchronously", "⏱️", defaultWait = 2),
             BlockTemplate(BlockCategory.LOGIC, "Repeat ... times", "run loop block", "🔁", isContainer = true),
+            BlockTemplate(BlockCategory.LOGIC, "For each in list", "iterate through elements", "🔄", isContainer = true),
+            BlockTemplate(BlockCategory.LOGIC, "While is true", "loop while condition matches", "⏳", isContainer = true),
+            BlockTemplate(BlockCategory.LOGIC, "Try / Catch", "catch and handle runtime errors", "🛡️", isContainer = true),
             BlockTemplate(BlockCategory.LOGIC, "Check permission", "verify author permissions", "🛡️", isContainer = true, defaultPermission = "Administrator"),
+            BlockTemplate(BlockCategory.LOGIC, "Cooldown check", "per-user rate limit interval", "⏳", defaultWait = 5),
             BlockTemplate(BlockCategory.LOGIC, "With random chance", "execute branch with % probability", "🎲", isContainer = true),
             BlockTemplate(BlockCategory.LOGIC, "Stop script", "stop execution early", "🛑")
         ),
         BlockCategory.VARIABLE to listOf(
             BlockTemplate(BlockCategory.VARIABLE, "Set var", "store value in memory", "📦", defaultVarName = "user_points", defaultVarVal = "10"),
             BlockTemplate(BlockCategory.VARIABLE, "Change var", "increment/decrement value", "➕", defaultVarName = "user_points", defaultVarVal = "1"),
+            BlockTemplate(BlockCategory.VARIABLE, "List operation", "add or remove item from list", "📜", defaultVarName = "items_list", defaultVarVal = "apple"),
+            BlockTemplate(BlockCategory.VARIABLE, "Map operation", "set key-value in dictionary", "🗺️", defaultVarName = "user_data", defaultVarVal = "gold"),
+            BlockTemplate(BlockCategory.VARIABLE, "Random number picker", "generate random int in range", "🎲", defaultVarName = "rolled_num", defaultVarVal = "100"),
+            BlockTemplate(BlockCategory.VARIABLE, "Math operation", "add, multiply, divide, round", "🔢", defaultVarName = "total_score", defaultVarVal = "5"),
+            BlockTemplate(BlockCategory.VARIABLE, "String operation", "join, split, or uppercase", "🔤", defaultVarName = "clean_text", defaultVarVal = "HELLO"),
             BlockTemplate(BlockCategory.VARIABLE, "Save to Database", "persist variable permanently", "💾", defaultVarName = "user_points"),
             BlockTemplate(BlockCategory.VARIABLE, "Get from Database", "retrieve stored value", "🔍", defaultVarName = "user_points")
+        ),
+        BlockCategory.DISCORD_OBJECT to listOf(
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "User object", "get avatar, mention, id, or roles", "👤", defaultDiscordObjectType = "User", defaultObjectProperty = "tag"),
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "Channel object", "get channel mention, id, or topic", "💬", defaultDiscordObjectType = "Channel", defaultObjectProperty = "name"),
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "Server object", "get guild member count or boost level", "🏰", defaultDiscordObjectType = "Server", defaultObjectProperty = "member_count"),
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "Message object", "get content, author, or attachments", "📨", defaultDiscordObjectType = "Message", defaultObjectProperty = "content"),
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "Permission check", "check user permission flags", "🛡️", isContainer = true, defaultPermission = "Manage Messages"),
+            BlockTemplate(BlockCategory.DISCORD_OBJECT, "Role hierarchy check", "verify author role is higher than target", "⚖️", isContainer = true)
+        ),
+        BlockCategory.NETWORK to listOf(
+            BlockTemplate(BlockCategory.NETWORK, "HTTP GET request", "fetch REST API response", "🌐", defaultHttpMethod = "GET", defaultHttpUrl = "https://api.github.com/zen"),
+            BlockTemplate(BlockCategory.NETWORK, "HTTP POST request", "send JSON payload to API", "📤", defaultHttpMethod = "POST", defaultHttpUrl = "https://httpbin.org/post"),
+            BlockTemplate(BlockCategory.NETWORK, "Parse JSON response", "parse raw API body as object", "🧩", defaultJsonPath = "data.message"),
+            BlockTemplate(BlockCategory.NETWORK, "Extract JSON path", "read dot-notation field from response", "🎯", defaultJsonPath = "data.quote"),
+            BlockTemplate(BlockCategory.NETWORK, "Webhook send", "dispatch message via Discord Webhook", "🚀", defaultMessage = "Alert from BotStudio!")
         ),
         BlockCategory.DESTRUCTIVE to listOf(
             BlockTemplate(BlockCategory.DESTRUCTIVE, "Purge messages", "bulk delete recent messages", "🔥", defaultPurge = 10, defaultChannel = "#general"),
@@ -189,6 +239,28 @@ object PaletteCatalog {
             blocks = listOf(
                 VisualBlock(category = BlockCategory.EVENT, title = "When slash command run", subtitle = "/help - Show bot commands", icon = "⌨️", slashCommandName = "help", slashCommandDesc = "Show bot commands list"),
                 VisualBlock(category = BlockCategory.MESSAGE, title = "Send rich embed", subtitle = "embed \"Bot Command Manual\"", icon = "📋", embedTitle = "📖 Bot Command Manual", embedDescription = "`/help` - This menu\n`/ping` - Check latency\n`/clear` - Purge chat", targetChannel = "#general")
+            )
+        ),
+        BotRecipe(
+            id = "ticket_bot",
+            name = "Interactive Ticket Bot",
+            emoji = "🎫",
+            description = "Sends interactive button and creates dedicated support channel on click",
+            blocks = listOf(
+                VisualBlock(category = BlockCategory.EVENT, title = "When button clicked", subtitle = "on button id: \"create_ticket\"", icon = "🔘", buttonCustomId = "create_ticket"),
+                VisualBlock(category = BlockCategory.ACTION, title = "Create channel", subtitle = "create #ticket-user", icon = "📁", newChannelName = "ticket-support"),
+                VisualBlock(category = BlockCategory.MESSAGE, title = "Send message", subtitle = "\"Ticket opened! A moderator will assist you shortly.\"", icon = "💬", messageContent = "Support ticket created! Please describe your issue.", targetChannel = "#ticket-support")
+            )
+        ),
+        BotRecipe(
+            id = "api_quote_bot",
+            name = "REST API Quote Bot",
+            emoji = "🌐",
+            description = "Fetches a live quote via HTTP GET and displays it in a rich embed",
+            blocks = listOf(
+                VisualBlock(category = BlockCategory.EVENT, title = "When slash command run", subtitle = "/quote - Get random quote", icon = "⌨️", slashCommandName = "quote", slashCommandDesc = "Fetches live quote from API"),
+                VisualBlock(category = BlockCategory.NETWORK, title = "HTTP GET request", subtitle = "GET https://api.github.com/zen", icon = "🌐", httpMethod = "GET", httpUrl = "https://api.github.com/zen"),
+                VisualBlock(category = BlockCategory.MESSAGE, title = "Send rich embed", subtitle = "embed \"Quote of the Day\"", icon = "📋", embedTitle = "💡 Zen Wisdom", embedDescription = "Mind your words, they become actions.", targetChannel = "#general")
             )
         )
     )

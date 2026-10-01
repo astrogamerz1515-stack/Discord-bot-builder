@@ -54,6 +54,20 @@ enum class BlockCategory(
         color = Color(0xFFFF5555), // Red
         darkStripColor = Color(0xFFD32F2F),
         emoji = "⚠️"
+    ),
+    DISCORD_OBJECT(
+        title = "Discord",
+        description = "User, Server & Channel Data",
+        color = Color(0xFFEB459E), // Pink
+        darkStripColor = Color(0xFFB82574),
+        emoji = "👑"
+    ),
+    NETWORK(
+        title = "API / Web",
+        description = "HTTP, JSON & Webhooks",
+        color = Color(0xFF00B4D8), // Teal
+        darkStripColor = Color(0xFF007799),
+        emoji = "🌐"
     )
 }
 

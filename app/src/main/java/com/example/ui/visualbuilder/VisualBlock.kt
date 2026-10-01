@@ -12,7 +12,7 @@ sealed class InlineToken {
 
 /**
  * Data model representing a block on the Visual Builder canvas.
- * Can represent events, messages, actions, logic branches, variables, and moderation.
+ * Can represent events, messages, actions, logic branches, variables, Discord objects, APIs, and moderation.
  */
 data class VisualBlock(
     val id: String = UUID.randomUUID().toString(),
@@ -22,7 +22,7 @@ data class VisualBlock(
     val icon: String,
     val indentLevel: Int = 0,
     val parentId: String? = null,
-    val isContainer: Boolean = false, // True for C-Blocks like If / Loop
+    val isContainer: Boolean = false, // True for C-Blocks like If / Loop / Try-Catch
     val isContainerEnd: Boolean = false,
     val slots: List<VisualBlock> = emptyList(),
 
@@ -31,13 +31,21 @@ data class VisualBlock(
     val targetChannel: String = "#general",
     val targetUser: String = "Author", // "Author", "Mentioned", "Owner"
     val reactionEmoji: String = "⭐",
+    val isEphemeral: Boolean = false,
 
-    // Parameters: Embeds
+    // Parameters: Embeds & Components
     val embedTitle: String = "Server Notification",
     val embedDescription: String = "Welcome to the server! Read the rules in #rules.",
     val embedColorHex: String = "#3D7EFF",
     val embedFieldName: String = "Important Notice",
     val embedFieldValue: String = "Be respectful to everyone.",
+    val buttonLabel: String = "Click Me",
+    val buttonCustomId: String = "btn_action_1",
+    val buttonStyle: String = "Primary", // Primary, Secondary, Success, Danger
+    val selectPlaceholder: String = "Select an option...",
+    val selectCustomId: String = "menu_select_1",
+    val modalTitle: String = "Submit Form",
+    val modalCustomId: String = "modal_form_1",
 
     // Parameters: Logic & Conditions
     val conditionField: String = "message.content", // "message.content", "author.bot", "channel.name"
@@ -47,6 +55,9 @@ data class VisualBlock(
     val repeatCount: Int = 3,
     val chancePercent: Int = 50,
     val requiredPermission: String = "Administrator", // "Administrator", "Manage Messages", "Kick Members", "Ban Members"
+    val cooldownSeconds: Int = 10,
+    val loopItemName: String = "item",
+    val loopListName: String = "members_list",
 
     // Parameters: Roles & Actions
     val roleName: String = "Member",
@@ -54,19 +65,35 @@ data class VisualBlock(
     val actionReason: String = "Rules violation",
     val newChannelName: String = "ticket-01",
     val newNickname: String = "Bot Member",
+    val slowmodeSeconds: Int = 5,
 
-    // Parameters: Variables & Storage
+    // Parameters: Variables, Lists & Math
     val variableName: String = "user_points",
-    val variableOperation: String = "=", // "=", "+=", "-="
+    val variableOperation: String = "=", // "=", "+=", "-=", "*=", "/="
     val variableValue: String = "10",
     val dbKey: String = "user_balance",
+    val mathOperation: String = "+", // "+", "-", "*", "/", "round"
+    val stringOperation: String = "uppercase", // "join", "split", "replace", "uppercase", "lowercase"
 
-    // Parameters: Slash Commands
+    // Parameters: Slash Commands & Scheduler
     val slashCommandName: String = "ping",
     val slashCommandDesc: String = "Responds with bot latency",
+    val cronSchedule: String = "0 * * * *", // Hourly
 
-    // Parameters: Destructive / Moderation
-    val purgeCount: Int = 10
+    // Parameters: Discord Objects
+    val discordObjectType: String = "User", // "User", "Channel", "Server", "Message"
+    val objectProperty: String = "tag", // "avatar", "mention", "id", "roles", "member_count", "content"
+
+    // Parameters: Network & APIs
+    val httpMethod: String = "GET", // "GET", "POST", "PUT", "DELETE"
+    val httpUrl: String = "https://api.github.com/zen",
+    val httpBody: String = "{}",
+    val jsonPath: String = "data.message",
+    val webhookUrl: String = "https://discord.com/api/webhooks/...",
+
+    // Parameters: Moderation & Destructive
+    val purgeCount: Int = 10,
+    val commentNote: String = "Write a developer note or docstring..."
 ) {
     /**
      * Returns a formatted descriptive subtitle based on custom configuration.
@@ -76,14 +103,28 @@ data class VisualBlock(
             subtitle.isNotEmpty() -> subtitle
             category == BlockCategory.EVENT && title.contains("slash", ignoreCase = true) ->
                 "/$slashCommandName - $slashCommandDesc"
+            category == BlockCategory.EVENT && title.contains("button", ignoreCase = true) ->
+                "on button id: \"$buttonCustomId\""
+            category == BlockCategory.EVENT && title.contains("select", ignoreCase = true) ->
+                "on select menu id: \"$selectCustomId\""
+            category == BlockCategory.EVENT && title.contains("modal", ignoreCase = true) ->
+                "on modal submit: \"$modalCustomId\""
+            category == BlockCategory.EVENT && title.contains("schedule", ignoreCase = true) ->
+                "cron schedule \"$cronSchedule\""
             category == BlockCategory.MESSAGE && title.contains("Send message", ignoreCase = true) ->
                 "\"$messageContent\" in $targetChannel"
             category == BlockCategory.MESSAGE && title.contains("Reply", ignoreCase = true) ->
                 "\"$messageContent\""
             category == BlockCategory.MESSAGE && title.contains("embed", ignoreCase = true) ->
                 "embed \"$embedTitle\" in $targetChannel"
+            category == BlockCategory.MESSAGE && title.contains("button", ignoreCase = true) ->
+                "action row: \"$buttonLabel\" [$buttonStyle]"
+            category == BlockCategory.MESSAGE && title.contains("select menu", ignoreCase = true) ->
+                "menu: \"$selectPlaceholder\""
             category == BlockCategory.MESSAGE && title.contains("reaction", ignoreCase = true) ->
                 "add $reactionEmoji to message"
+            category == BlockCategory.MESSAGE && title.contains("typing", ignoreCase = true) ->
+                "typing in $targetChannel"
             category == BlockCategory.MESSAGE && title.contains("DM", ignoreCase = true) ->
                 "DM \"$messageContent\" to $targetUser"
             category == BlockCategory.LOGIC && title.contains("If", ignoreCase = true) ->
@@ -92,6 +133,10 @@ data class VisualBlock(
                 "sleep for ${waitSeconds}s"
             category == BlockCategory.LOGIC && title.contains("Repeat", ignoreCase = true) ->
                 "loop $repeatCount times"
+            category == BlockCategory.LOGIC && title.contains("For each", ignoreCase = true) ->
+                "for $loopItemName in $loopListName"
+            category == BlockCategory.LOGIC && title.contains("cooldown", ignoreCase = true) ->
+                "${cooldownSeconds}s per-user rate limit"
             category == BlockCategory.LOGIC && title.contains("chance", ignoreCase = true) ->
                 "${chancePercent}% probability"
             category == BlockCategory.LOGIC && title.contains("permission", ignoreCase = true) ->
@@ -104,6 +149,18 @@ data class VisualBlock(
                 "DB.set(\"$dbKey\", $variableName)"
             category == BlockCategory.VARIABLE && title.contains("Get from Database", ignoreCase = true) ->
                 "$variableName = DB.get(\"$dbKey\")"
+            category == BlockCategory.DISCORD_OBJECT && title.contains("User", ignoreCase = true) ->
+                "user.$objectProperty of $targetUser"
+            category == BlockCategory.DISCORD_OBJECT && title.contains("Channel", ignoreCase = true) ->
+                "channel.$objectProperty of $targetChannel"
+            category == BlockCategory.DISCORD_OBJECT && title.contains("Server", ignoreCase = true) ->
+                "guild.$objectProperty"
+            category == BlockCategory.NETWORK && title.contains("HTTP", ignoreCase = true) ->
+                "$httpMethod $httpUrl"
+            category == BlockCategory.NETWORK && title.contains("JSON", ignoreCase = true) ->
+                "extract \"$jsonPath\""
+            category == BlockCategory.NETWORK && title.contains("Webhook", ignoreCase = true) ->
+                "send payload to webhook"
             category == BlockCategory.ACTION && title.contains("role", ignoreCase = true) ->
                 "${if (title.contains("Remove", ignoreCase = true)) "remove" else "add"} \"$roleName\" for $targetUser"
             category == BlockCategory.ACTION && title.contains("Timeout", ignoreCase = true) ->
@@ -129,6 +186,20 @@ data class VisualBlock(
                 InlineToken.Chip("/$slashCommandName", "slashCommandName"),
                 InlineToken.Text("run")
             )
+            category == BlockCategory.EVENT && title.contains("button", ignoreCase = true) -> listOf(
+                InlineToken.Text("When button"),
+                InlineToken.Chip(buttonCustomId, "buttonCustomId"),
+                InlineToken.Text("clicked")
+            )
+            category == BlockCategory.EVENT && title.contains("select", ignoreCase = true) -> listOf(
+                InlineToken.Text("When select menu"),
+                InlineToken.Chip(selectCustomId, "selectCustomId"),
+                InlineToken.Text("selected")
+            )
+            category == BlockCategory.EVENT && title.contains("schedule", ignoreCase = true) -> listOf(
+                InlineToken.Text("At cron"),
+                InlineToken.Chip(cronSchedule, "cronSchedule")
+            )
             category == BlockCategory.MESSAGE && title.contains("Send message", ignoreCase = true) -> listOf(
                 InlineToken.Text("Send"),
                 InlineToken.Chip("\"$messageContent\"", "messageContent"),
@@ -145,6 +216,12 @@ data class VisualBlock(
                 InlineToken.Text("to"),
                 InlineToken.Chip(targetChannel, "targetChannel")
             )
+            category == BlockCategory.MESSAGE && title.contains("button", ignoreCase = true) -> listOf(
+                InlineToken.Text("Action Row button"),
+                InlineToken.Chip("\"$buttonLabel\"", "buttonLabel"),
+                InlineToken.Text("id:"),
+                InlineToken.Chip(buttonCustomId, "buttonCustomId")
+            )
             category == BlockCategory.MESSAGE && title.contains("DM", ignoreCase = true) -> listOf(
                 InlineToken.Text("DM"),
                 InlineToken.Chip("\"$messageContent\"", "messageContent"),
@@ -154,6 +231,10 @@ data class VisualBlock(
             category == BlockCategory.MESSAGE && title.contains("reaction", ignoreCase = true) -> listOf(
                 InlineToken.Text("Add reaction"),
                 InlineToken.Chip(reactionEmoji, "reactionEmoji")
+            )
+            category == BlockCategory.MESSAGE && title.contains("typing", ignoreCase = true) -> listOf(
+                InlineToken.Text("Send typing to"),
+                InlineToken.Chip(targetChannel, "targetChannel")
             )
             category == BlockCategory.ACTION && title.contains("Add role", ignoreCase = true) -> listOf(
                 InlineToken.Text("Add role"),
@@ -195,6 +276,16 @@ data class VisualBlock(
                 InlineToken.Text("Repeat"),
                 InlineToken.Chip("$repeatCount times", "repeatCount")
             )
+            category == BlockCategory.LOGIC && title.contains("For each", ignoreCase = true) -> listOf(
+                InlineToken.Text("For each"),
+                InlineToken.Chip(loopItemName, "loopItemName"),
+                InlineToken.Text("in"),
+                InlineToken.Chip(loopListName, "loopListName")
+            )
+            category == BlockCategory.LOGIC && title.contains("cooldown", ignoreCase = true) -> listOf(
+                InlineToken.Text("Rate limit"),
+                InlineToken.Chip("${cooldownSeconds}s", "cooldownSeconds")
+            )
             category == BlockCategory.LOGIC && title.contains("chance", ignoreCase = true) -> listOf(
                 InlineToken.Text("With chance"),
                 InlineToken.Chip("${chancePercent}%", "chancePercent")
@@ -220,6 +311,25 @@ data class VisualBlock(
                 InlineToken.Chip(variableName, "variableName"),
                 InlineToken.Text("as DB key"),
                 InlineToken.Chip("\"$dbKey\"", "dbKey")
+            )
+            category == BlockCategory.DISCORD_OBJECT -> listOf(
+                InlineToken.Text("Get"),
+                InlineToken.Chip(objectProperty, "objectProperty"),
+                InlineToken.Text("of"),
+                InlineToken.Chip(discordObjectType, "discordObjectType")
+            )
+            category == BlockCategory.NETWORK && title.contains("HTTP", ignoreCase = true) -> listOf(
+                InlineToken.Text("HTTP"),
+                InlineToken.Chip(httpMethod, "httpMethod"),
+                InlineToken.Chip(httpUrl, "httpUrl")
+            )
+            category == BlockCategory.NETWORK && title.contains("JSON", ignoreCase = true) -> listOf(
+                InlineToken.Text("Extract JSON"),
+                InlineToken.Chip(jsonPath, "jsonPath")
+            )
+            category == BlockCategory.NETWORK && title.contains("Webhook", ignoreCase = true) -> listOf(
+                InlineToken.Text("Webhook send"),
+                InlineToken.Chip("\"$messageContent\"", "messageContent")
             )
             category == BlockCategory.DESTRUCTIVE && title.contains("Purge", ignoreCase = true) -> listOf(
                 InlineToken.Text("Purge"),

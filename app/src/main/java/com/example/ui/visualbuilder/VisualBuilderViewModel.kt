@@ -110,6 +110,33 @@ class VisualBuilderViewModel : ViewModel() {
     private val _activeExecutingBlockId = MutableStateFlow<String?>(null)
     val activeExecutingBlockId: StateFlow<String?> = _activeExecutingBlockId.asStateFlow()
 
+    // Canvas Zoom State (0.6f to 2.0f)
+    private val _canvasZoom = MutableStateFlow(1.0f)
+    val canvasZoom: StateFlow<Float> = _canvasZoom.asStateFlow()
+
+    fun zoomIn() {
+        _canvasZoom.value = (_canvasZoom.value + 0.15f).coerceAtMost(2.0f)
+    }
+
+    fun zoomOut() {
+        _canvasZoom.value = (_canvasZoom.value - 0.15f).coerceAtLeast(0.6f)
+    }
+
+    fun resetZoom() {
+        _canvasZoom.value = 1.0f
+    }
+
+    fun setZoom(scale: Float) {
+        _canvasZoom.value = scale.coerceIn(0.5f, 2.5f)
+    }
+
+    fun dropOnTrash(blockId: String) {
+        removeBlock(blockId)
+        viewModelScope.launch {
+            _snackbarMessage.emit("Block moved to trash 🗑️")
+        }
+    }
+
     // Palette & Category State
     private val _selectedCategory = MutableStateFlow(BlockCategory.EVENT)
     val selectedCategory: StateFlow<BlockCategory> = _selectedCategory.asStateFlow()
@@ -324,7 +351,17 @@ class VisualBuilderViewModel : ViewModel() {
             slashCommandDesc = template.defaultSlashDesc,
             requiredPermission = template.defaultPermission,
             variableName = template.defaultVarName,
-            variableValue = template.defaultVarVal
+            variableValue = template.defaultVarVal,
+            buttonLabel = template.defaultButtonLabel,
+            buttonCustomId = template.defaultButtonCustomId,
+            selectCustomId = template.defaultSelectCustomId,
+            modalCustomId = template.defaultModalCustomId,
+            cronSchedule = template.defaultCronSchedule,
+            discordObjectType = template.defaultDiscordObjectType,
+            objectProperty = template.defaultObjectProperty,
+            httpMethod = template.defaultHttpMethod,
+            httpUrl = template.defaultHttpUrl,
+            jsonPath = template.defaultJsonPath
         )
     }
 
@@ -534,6 +571,18 @@ class VisualBuilderViewModel : ViewModel() {
                             addLog("📦 [VARIABLE] ${block.displaySubtitle}")
                         }
                     }
+                    BlockCategory.DISCORD_OBJECT -> {
+                        if (!isInsideContainer || conditionPassed) {
+                            delay(100)
+                            addLog("👑 [DISCORD] Read ${block.discordObjectType}.${block.objectProperty}: ${block.displaySubtitle}")
+                        }
+                    }
+                    BlockCategory.NETWORK -> {
+                        if (!isInsideContainer || conditionPassed) {
+                            delay(200)
+                            addLog("🌐 [NETWORK] ${block.httpMethod} ${block.httpUrl} -> Status: 200 OK")
+                        }
+                    }
                     BlockCategory.DESTRUCTIVE -> {
                         if (!isInsideContainer || conditionPassed) {
                             delay(150)
@@ -565,8 +614,10 @@ class VisualBuilderViewModel : ViewModel() {
         sb.appendLine(" Target: discord.py >= 2.3.0 | Python 3.10+")
         sb.appendLine("\"\"\"")
         sb.appendLine("import discord")
-        sb.appendLine("from discord.ext import commands")
+        sb.appendLine("from discord.ext import commands, tasks")
         sb.appendLine("import asyncio")
+        sb.appendLine("import aiohttp")
+        sb.appendLine("import json")
         sb.appendLine()
         sb.appendLine("intents = discord.Intents.default()")
         sb.appendLine("intents.message_content = True")
@@ -593,10 +644,22 @@ class VisualBuilderViewModel : ViewModel() {
                     if (block.title.contains("slash", ignoreCase = true)) {
                         sb.appendLine("@bot.tree.command(name=\"${block.slashCommandName}\", description=\"${block.slashCommandDesc}\")")
                         sb.appendLine("async def ${block.slashCommandName}_cmd(interaction: discord.Interaction):")
+                        sb.appendLine("    # The #1 Fix: Immediate deferReply to eliminate 3s timeouts")
+                        sb.appendLine("    await interaction.response.defer()")
                         ifIndent = "    "
+                    } else if (block.title.contains("button", ignoreCase = true)) {
+                        sb.appendLine("@bot.event")
+                        sb.appendLine("async def on_interaction(interaction: discord.Interaction):")
+                        sb.appendLine("    if interaction.type == discord.InteractionType.component and interaction.data.get('custom_id') == \"${block.buttonCustomId}\":")
+                        sb.appendLine("        await interaction.response.defer()")
+                        ifIndent = "        "
                     } else if (block.title.contains("joins", ignoreCase = true)) {
                         sb.appendLine("@bot.event")
                         sb.appendLine("async def on_member_join(member: discord.Member):")
+                        ifIndent = "    "
+                    } else if (block.title.contains("schedule", ignoreCase = true)) {
+                        sb.appendLine("@tasks.loop(hours=1)")
+                        sb.appendLine("async def scheduled_cron_task():")
                         ifIndent = "    "
                     } else {
                         sb.appendLine("@bot.event")
@@ -617,12 +680,21 @@ class VisualBuilderViewModel : ViewModel() {
                         ifIndent = "        "
                     } else if (block.title.contains("Wait", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await asyncio.sleep(${block.waitSeconds})")
+                    } else if (block.title.contains("Repeat", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}for _ in range(${block.repeatCount}):")
+                        ifIndent = "        "
                     }
                 }
                 BlockCategory.MESSAGE -> {
                     if (block.title.contains("embed", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}embed = discord.Embed(title=\"${block.embedTitle}\", description=\"${block.embedDescription}\", color=0x3D7EFF)")
                         sb.appendLine("${ifIndent}await message.channel.send(embed=embed)")
+                    } else if (block.title.contains("button", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}view = discord.ui.View()")
+                        sb.appendLine("${ifIndent}view.add_item(discord.ui.Button(label=\"${block.buttonLabel}\", custom_id=\"${block.buttonCustomId}\", style=discord.ButtonStyle.primary))")
+                        sb.appendLine("${ifIndent}await message.channel.send(\"Choose an action:\", view=view)")
+                    } else if (block.title.contains("typing", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}await message.channel.typing()")
                     } else if (block.title.contains("Reply", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await message.reply(\"${block.messageContent}\")")
                     } else if (block.title.contains("reaction", ignoreCase = true)) {
@@ -643,10 +715,27 @@ class VisualBuilderViewModel : ViewModel() {
                         sb.appendLine("${ifIndent}await message.author.timeout(datetime.timedelta(minutes=${block.timeoutMinutes}), reason=\"${block.actionReason}\")")
                     } else if (block.title.contains("Kick", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await message.author.kick(reason=\"${block.actionReason}\")")
+                    } else if (block.title.contains("Create channel", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}await message.guild.create_text_channel(\"${block.newChannelName}\")")
                     }
                 }
                 BlockCategory.VARIABLE -> {
                     sb.appendLine("${ifIndent}${block.variableName} = ${block.variableValue}")
+                }
+                BlockCategory.DISCORD_OBJECT -> {
+                    sb.appendLine("${ifIndent}# Read Discord Object Property: ${block.discordObjectType}.${block.objectProperty}")
+                    sb.appendLine("${ifIndent}obj_value = getattr(message.author, '${block.objectProperty}', str(message.author))")
+                }
+                BlockCategory.NETWORK -> {
+                    if (block.title.contains("HTTP", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}async with aiohttp.ClientSession() as session:")
+                        sb.appendLine("${ifIndent}    async with session.get(\"${block.httpUrl}\") as resp:")
+                        sb.appendLine("${ifIndent}        api_data = await resp.json() if resp.content_type == 'application/json' else await resp.text()")
+                    } else if (block.title.contains("Webhook", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}async with aiohttp.ClientSession() as session:")
+                        sb.appendLine("${ifIndent}    webhook = discord.Webhook.from_url(\"${block.webhookUrl}\", session=session)")
+                        sb.appendLine("${ifIndent}    await webhook.send(\"${block.messageContent}\")")
+                    }
                 }
                 BlockCategory.DESTRUCTIVE -> {
                     if (block.title.contains("Purge", ignoreCase = true)) {
@@ -672,7 +761,7 @@ class VisualBuilderViewModel : ViewModel() {
         sb.appendLine(" * Discord Bot generated with Visual Builder")
         sb.appendLine(" * Target: discord.js v14 | Node.js 18+")
         sb.appendLine(" */")
-        sb.appendLine("const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');")
+        sb.appendLine("const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');")
         sb.appendLine()
         sb.appendLine("const client = new Client({")
         sb.appendLine("  intents: [")
@@ -695,13 +784,28 @@ class VisualBuilderViewModel : ViewModel() {
             when (block.category) {
                 BlockCategory.EVENT -> {
                     if (inIf) { sb.appendLine("  }"); inIf = false }
-                    if (block.title.contains("joins", ignoreCase = true)) {
+                    if (block.title.contains("slash", ignoreCase = true)) {
+                        sb.appendLine("client.on('interactionCreate', async (interaction) => {")
+                        sb.appendLine("  if (!interaction.isChatInputCommand()) return;")
+                        sb.appendLine("  if (interaction.commandName === '${block.slashCommandName}') {")
+                        sb.appendLine("    // The #1 Fix: Call deferReply immediately before heavy work")
+                        sb.appendLine("    await interaction.deferReply();")
+                        ifIndent = "    "
+                        inIf = true
+                    } else if (block.title.contains("button", ignoreCase = true)) {
+                        sb.appendLine("client.on('interactionCreate', async (interaction) => {")
+                        sb.appendLine("  if (interaction.isButton() && interaction.customId === '${block.buttonCustomId}') {")
+                        sb.appendLine("    await interaction.deferUpdate();")
+                        ifIndent = "    "
+                        inIf = true
+                    } else if (block.title.contains("joins", ignoreCase = true)) {
                         sb.appendLine("client.on('guildMemberAdd', async (member) => {")
+                        ifIndent = "  "
                     } else {
                         sb.appendLine("client.on('messageCreate', async (message) => {")
                         sb.appendLine("  if (message.author.bot) return;")
+                        ifIndent = "  "
                     }
-                    ifIndent = "  "
                 }
                 BlockCategory.LOGIC -> {
                     if (block.title.contains("If", ignoreCase = true)) {
@@ -716,6 +820,9 @@ class VisualBuilderViewModel : ViewModel() {
                         ifIndent = "    "
                     } else if (block.title.contains("Wait", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await new Promise(r => setTimeout(r, ${block.waitSeconds * 1000}));")
+                    } else if (block.title.contains("Repeat", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}for (let i = 0; i < ${block.repeatCount}; i++) {")
+                        ifIndent = "    "
                     }
                 }
                 BlockCategory.MESSAGE -> {
@@ -725,6 +832,13 @@ class VisualBuilderViewModel : ViewModel() {
                         sb.appendLine("${ifIndent}  .setDescription(\"${block.embedDescription}\")")
                         sb.appendLine("${ifIndent}  .setColor(0x3D7EFF);")
                         sb.appendLine("${ifIndent}await message.channel.send({ embeds: [embed] });")
+                    } else if (block.title.contains("button", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}const row = new ActionRowBuilder().addComponents(")
+                        sb.appendLine("${ifIndent}  new ButtonBuilder().setCustomId('${block.buttonCustomId}').setLabel('${block.buttonLabel}').setStyle(ButtonStyle.Primary)")
+                        sb.appendLine("${ifIndent});")
+                        sb.appendLine("${ifIndent}await message.channel.send({ content: 'Action menu:', components: [row] });")
+                    } else if (block.title.contains("typing", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}await message.channel.sendTyping();")
                     } else if (block.title.contains("Reply", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await message.reply(\"${block.messageContent}\");")
                     } else if (block.title.contains("reaction", ignoreCase = true)) {
@@ -739,10 +853,21 @@ class VisualBuilderViewModel : ViewModel() {
                         sb.appendLine("${ifIndent}if (role) await message.member.roles.add(role);")
                     } else if (block.title.contains("Timeout", ignoreCase = true)) {
                         sb.appendLine("${ifIndent}await message.member.timeout(${block.timeoutMinutes} * 60 * 1000, \"${block.actionReason}\");")
+                    } else if (block.title.contains("Create channel", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}await message.guild.channels.create({ name: '${block.newChannelName}' });")
                     }
                 }
                 BlockCategory.VARIABLE -> {
                     sb.appendLine("${ifIndent}let ${block.variableName} = ${block.variableValue};")
+                }
+                BlockCategory.DISCORD_OBJECT -> {
+                    sb.appendLine("${ifIndent}const propValue = message.author['${block.objectProperty}'] || message.author.tag;")
+                }
+                BlockCategory.NETWORK -> {
+                    if (block.title.contains("HTTP", ignoreCase = true)) {
+                        sb.appendLine("${ifIndent}const res = await fetch(\"${block.httpUrl}\");")
+                        sb.appendLine("${ifIndent}const apiJson = await res.json();")
+                    }
                 }
                 BlockCategory.DESTRUCTIVE -> {
                     if (block.title.contains("Purge", ignoreCase = true)) {

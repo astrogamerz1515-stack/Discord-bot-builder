@@ -90,6 +90,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -139,6 +141,7 @@ fun VisualBuilderScreen(
     val simulationLogs by viewModel.simulationLogs.collectAsState()
     val simulatedMessages by viewModel.simulatedMessages.collectAsState()
     val isSimulationRunning by viewModel.isSimulationRunning.collectAsState()
+    val canvasZoom by viewModel.canvasZoom.collectAsState()
 
     var showClearDialog by remember { mutableStateOf(false) }
     val lazyListState = rememberLazyListState()
@@ -302,6 +305,11 @@ fun VisualBuilderScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
+                            .graphicsLayer {
+                                scaleX = canvasZoom
+                                scaleY = canvasZoom
+                                transformOrigin = TransformOrigin(0.5f, 0f)
+                            }
                             .testTag("canvas_block_stack"),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -402,6 +410,40 @@ fun VisualBuilderScreen(
                         modifier = Modifier.width(280.dp)
                     )
                 }
+            }
+
+            // Canvas Minimap (Top-Right)
+            if (blocks.isNotEmpty()) {
+                CanvasMinimap(
+                    blocks = blocks,
+                    activeBlockId = activeExecutingBlockId,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 10.dp, end = 12.dp)
+                )
+            }
+
+            // Canvas Zoom Controls (Bottom-Right)
+            CanvasZoomControls(
+                zoom = canvasZoom,
+                onZoomIn = { viewModel.zoomIn() },
+                onZoomOut = { viewModel.zoomOut() },
+                onResetZoom = { viewModel.resetZoom() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 12.dp, end = 12.dp)
+            )
+
+            // Trash Drop-Zone (Pulsing Red Bar when dragging)
+            if (isDragging && draggedBlock != null) {
+                TrashDropZone(
+                    onDiscard = {
+                        viewModel.dropOnTrash(draggedBlock!!.id)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp)
+                )
             }
         }
     }
@@ -1642,6 +1684,176 @@ fun BlockEditSheetContent(
                 fontWeight = FontWeight.Bold,
                 color = VisualBuilderThemeColors.Background,
                 fontSize = 13.sp
+            )
+        }
+    }
+}
+
+/**
+ * Minimap in top-right corner showing small color bars for each block in the stack and active execution glow.
+ */
+@Composable
+fun CanvasMinimap(
+    blocks: List<VisualBlock>,
+    activeBlockId: String?,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .width(84.dp)
+            .heightIn(max = 140.dp)
+            .testTag("canvas_minimap"),
+        color = VisualBuilderThemeColors.Surface.copy(alpha = 0.85f),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, VisualBuilderThemeColors.Border),
+        shadowElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "MINIMAP",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = VisualBuilderThemeColors.OnSurfaceVariant
+                )
+                Text(
+                    text = "${blocks.size}",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp,
+                    color = VisualBuilderThemeColors.Primary
+                )
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            blocks.take(15).forEach { block ->
+                val isActive = block.id == activeBlockId
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = (1f - (block.indentLevel * 0.15f)).coerceIn(0.5f, 1f))
+                        .height(if (isActive) 5.dp else 3.dp)
+                        .background(
+                            if (isActive) VisualBuilderThemeColors.Primary else block.category.color,
+                            RoundedCornerShape(1.dp)
+                        )
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Floating Zoom Controls (+ / - / reset) for tap users.
+ */
+@Composable
+fun CanvasZoomControls(
+    zoom: Float,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onResetZoom: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.testTag("canvas_zoom_controls"),
+        color = VisualBuilderThemeColors.Surface.copy(alpha = 0.9f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, VisualBuilderThemeColors.Border),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            IconButton(
+                onClick = onZoomOut,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Default.Remove,
+                    contentDescription = "Zoom Out",
+                    tint = VisualBuilderThemeColors.OnBackground,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Text(
+                text = "${(zoom * 100).roundToInt()}%",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (zoom != 1.0f) VisualBuilderThemeColors.Primary else VisualBuilderThemeColors.OnSurfaceVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onResetZoom() }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+            IconButton(
+                onClick = onZoomIn,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Zoom In",
+                    tint = VisualBuilderThemeColors.OnBackground,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Pulsing trash drop zone overlay that appears while dragging blocks.
+ */
+@Composable
+fun TrashDropZone(
+    onDiscard: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "trashPulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "trashAlpha"
+    )
+
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable { onDiscard() }
+            .testTag("trash_drop_zone"),
+        color = Color(0xFFD32F2F).copy(alpha = 0.25f * alpha),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.5.dp, Color(0xFFFF5555).copy(alpha = alpha)),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = "Trash",
+                tint = Color(0xFFFF5555),
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = "TRASH ZONE • DROP TO DELETE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFFF5555)
             )
         }
     }
