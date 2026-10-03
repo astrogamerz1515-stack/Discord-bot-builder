@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DashboardCustomize
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
@@ -118,9 +119,9 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     val showGeneratedCodeDialog by viewModel.showGeneratedCodeDialog.collectAsState()
     val generatedCodeText by viewModel.generatedCodeText.collectAsState()
 
-    if (currentTab != AppTab.EDITOR) {
+    if (currentTab != AppTab.HOME) {
         BackHandler {
-            viewModel.setTab(AppTab.EDITOR)
+            viewModel.setTab(AppTab.HOME)
         }
     }
 
@@ -233,7 +234,37 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pinned high-visibility New Bot button directly in the upper tab strip
+                    // Pinned Home and New Bot buttons directly in the upper tab strip
+                    Surface(
+                        color = if (currentTab == AppTab.HOME) DiscordBlurple else DiscordElevated,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .heightIn(min = 32.dp)
+                            .clickable { viewModel.setTab(AppTab.HOME) }
+                            .testTag("btn_tab_home")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Home,
+                                contentDescription = "Home Screen",
+                                tint = if (currentTab == AppTab.HOME) Color.White else DiscordTextPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Home",
+                                color = if (currentTab == AppTab.HOME) Color.White else DiscordTextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
                     Surface(
                         color = DiscordGreen,
                         shape = RoundedCornerShape(14.dp),
@@ -282,7 +313,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        AppTab.values().forEach { tab ->
+                        AppTab.values().filter { it != AppTab.HOME }.forEach { tab ->
                             val isSelected = currentTab == tab
                             Surface(
                                 color = if (isSelected) DiscordBlurple else DiscordDarker,
@@ -297,6 +328,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     val icon = when (tab) {
+                                        AppTab.HOME -> Icons.Default.Home
                                         AppTab.EDITOR -> Icons.Default.Code
                                         AppTab.VISUAL_BUILDER -> Icons.Default.Extension
                                         AppTab.TERMINAL -> Icons.Default.Terminal
@@ -332,10 +364,10 @@ fun MainScreen(viewModel: BotStudioViewModel) {
         bottomBar = {
             // M3 Bottom Navigation Bar with 5 primary destinations for optimal ergonomic touch targets
             val bottomTabs = listOf(
+                AppTab.HOME,
                 AppTab.EDITOR,
                 AppTab.TERMINAL,
                 AppTab.SIMULATOR,
-                AppTab.EMBED_BUILDER,
                 AppTab.BOT_CONFIG
             )
             NavigationBar(
@@ -346,6 +378,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 bottomTabs.forEach { tab ->
                     val isSelected = currentTab == tab
                     val (icon, label) = when (tab) {
+                        AppTab.HOME -> Icons.Default.Home to "Home"
                         AppTab.EDITOR -> Icons.Default.Code to "Editor"
                         AppTab.VISUAL_BUILDER -> Icons.Default.Extension to "Visual"
                         AppTab.TERMINAL -> Icons.Default.Terminal to "Terminal"
@@ -395,6 +428,16 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 .padding(innerPadding)
         ) {
             when (currentTab) {
+                AppTab.HOME -> HomeScreen(
+                    viewModel = viewModel,
+                    onOpenEditor = { selectedProj ->
+                        viewModel.selectProject(selectedProj)
+                        viewModel.setTab(AppTab.EDITOR)
+                    },
+                    onCreateBotClick = {
+                        viewModel.showNewProjectDialog.value = true
+                    }
+                )
                 AppTab.EDITOR -> CodeEditorScreen(viewModel)
                 AppTab.VISUAL_BUILDER -> VisualBuilderScreen(onNavigateBack = { viewModel.setTab(AppTab.EDITOR) })
                 AppTab.TERMINAL -> TerminalScreen(viewModel)

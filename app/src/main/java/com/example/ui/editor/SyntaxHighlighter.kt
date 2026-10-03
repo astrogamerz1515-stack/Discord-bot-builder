@@ -69,6 +69,17 @@ object SyntaxHighlighter {
         "if", "else", "for", "range", "go", "chan", "select", "defer", "switch", "case", "fallthrough"
     )
 
+    private val LUA_KEYWORDS = setOf(
+        "local", "function", "end", "then", "do", "while", "repeat", "until", "if", "elseif", "else",
+        "return", "break", "nil", "true", "false", "and", "or", "not", "for", "in", "goto"
+    )
+
+    private val PHP_KEYWORDS = setOf(
+        "php", "echo", "function", "class", "public", "private", "protected", "return", "if", "else", "elseif",
+        "foreach", "as", "while", "new", "extends", "implements", "static", "try", "catch", "finally", "throw",
+        "use", "namespace", "include", "require", "require_once", "var", "const", "final", "abstract", "interface"
+    )
+
     private val C_CPP_KEYWORDS = setOf(
         "int", "char", "float", "double", "void", "long", "short", "unsigned", "signed", "struct",
         "class", "public", "private", "protected", "virtual", "override", "const", "static", "auto",
@@ -283,9 +294,9 @@ object SyntaxHighlighter {
                     quoteChar = c
                 } else if (c == '/' && i + 1 < line.length && line[i + 1] == '/') {
                     return i
-                } else if (c == '-' && i + 1 < line.length && line[i + 1] == '-' && extension == "sql") {
+                } else if (c == '-' && i + 1 < line.length && line[i + 1] == '-' && (extension == "sql" || extension == "lua")) {
                     return i
-                } else if (c == '#' && (extension in listOf("py", "sh", "bash", "zsh", "env", "properties", "yaml", "yml", "toml", "conf"))) {
+                } else if (c == '#' && (extension in listOf("py", "sh", "bash", "zsh", "env", "properties", "yaml", "yml", "toml", "conf", "php"))) {
                     return i
                 }
             }
@@ -302,6 +313,8 @@ object SyntaxHighlighter {
             "java" -> JAVA_KEYWORDS.contains(word)
             "rs" -> RUST_KEYWORDS.contains(word)
             "go" -> GO_KEYWORDS.contains(word)
+            "lua" -> LUA_KEYWORDS.contains(lowerWord)
+            "php" -> PHP_KEYWORDS.contains(lowerWord)
             "c", "cpp", "h", "hpp", "cs" -> C_CPP_KEYWORDS.contains(word) || JS_KEYWORDS.contains(word)
             "sql" -> SQL_KEYWORDS.contains(lowerWord)
             "sh", "bash", "zsh" -> SHELL_KEYWORDS.contains(lowerWord)

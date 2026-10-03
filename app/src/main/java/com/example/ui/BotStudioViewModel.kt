@@ -24,6 +24,7 @@ import java.util.Date
 import java.util.Locale
 
 enum class AppTab(val title: String, val iconName: String) {
+    HOME("Home", "home"),
     EDITOR("Editor", "code"),
     VISUAL_BUILDER("Visual Builder", "extension"),
     TERMINAL("Terminal", "terminal"),
@@ -69,7 +70,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     private val _activeFileContent = MutableStateFlow("")
     val activeFileContent: StateFlow<String> = _activeFileContent.asStateFlow()
 
-    private val _currentTab = MutableStateFlow(AppTab.EDITOR)
+    private val _currentTab = MutableStateFlow(AppTab.HOME)
     val currentTab: StateFlow<AppTab> = _currentTab.asStateFlow()
 
     private val _terminalLogs = MutableStateFlow<List<TerminalLog>>(emptyList())
@@ -344,6 +345,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             val created = repository.getProjectSync(newId)
             if (created != null) {
                 selectProject(created)
+                _currentTab.value = AppTab.EDITOR
             }
             showNewProjectDialog.value = false
         }
