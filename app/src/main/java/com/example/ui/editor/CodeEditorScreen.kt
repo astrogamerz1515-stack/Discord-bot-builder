@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lightbulb
@@ -116,6 +118,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var selectedDocItem by remember { mutableStateOf<CompletionItem?>(null) }
     var showIntelliSenseBar by remember { mutableStateOf(true) }
     var showSignatureHelp by remember { mutableStateOf(true) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
 
     // Synchronize TextFieldValue with file content and track cursor
     var textFieldValue by remember {
@@ -232,12 +235,28 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     val isSelected = activeFile?.id == file.id
                     val ext = file.filePath.substringAfterLast('.', "").lowercase()
                     val (badgeText, badgeColor) = when (ext) {
-                        "js" -> "JS" to Color(0xFFF7DF1E)
+                        "js", "mjs", "cjs" -> "JS" to Color(0xFFF7DF1E)
                         "ts" -> "TS" to Color(0xFF3178C6)
+                        "jsx" -> "JSX" to Color(0xFF61DAFB)
+                        "tsx" -> "TSX" to Color(0xFF61DAFB)
                         "py" -> "PY" to Color(0xFF3776AB)
                         "json" -> "{}" to Color(0xFF00B0F4)
-                        "env" -> "ENV" to DiscordGreen
-                        else -> "TXT" to DiscordTextMuted
+                        "html", "htm" -> "HTML" to Color(0xFFE44D26)
+                        "css", "scss" -> "CSS" to Color(0xFF264DE4)
+                        "sql" -> "SQL" to Color(0xFF00758F)
+                        "sh", "bash", "zsh" -> "SH" to Color(0xFF4EAA25)
+                        "yaml", "yml" -> "YML" to Color(0xFFCB171E)
+                        "toml" -> "TOML" to Color(0xFF9C4221)
+                        "md" -> "MD" to Color(0xFF0891B2)
+                        "kt", "kts" -> "KT" to Color(0xFF7F52FF)
+                        "java" -> "JAVA" to Color(0xFFEA2D2E)
+                        "rs" -> "RS" to Color(0xFFDEA584)
+                        "c", "h" -> "C" to Color(0xFF555555)
+                        "cpp", "hpp" -> "C++" to Color(0xFF00599C)
+                        "cs" -> "C#" to Color(0xFF178600)
+                        "xml", "svg" -> "XML" to Color(0xFFFF6600)
+                        "env", "properties" -> "ENV" to DiscordGreen
+                        else -> ext.uppercase().take(4).ifEmpty { "TXT" } to DiscordTextMuted
                     }
 
                     Surface(
@@ -375,27 +394,30 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
-            // AI Architect Assistant Button
+            // Clear Code of Selected File Button
             Surface(
-                color = DiscordBlurple.copy(alpha = 0.25f),
+                color = DiscordRed.copy(alpha = 0.2f),
                 shape = RoundedCornerShape(4.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
-                modifier = Modifier.clickable { viewModel.setTab(AppTab.AI_ASSISTANT) }
+                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordRed.copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { showClearConfirmDialog = true }
+                    .testTag("btn_clear_code")
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "AI Assistant",
-                        tint = DiscordBlurple,
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = "Clear Code",
+                        tint = DiscordRed,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "AI Assist",
-                        color = DiscordTextPrimary,
+                        text = "Clear Code",
+                        color = DiscordRed,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -905,6 +927,59 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         )
     }
 
+    // Confirmation Dialog to Clear Code of Selected File
+    if (showClearConfirmDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = null,
+                        tint = DiscordRed,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Clear File Code",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to clear all code in \"${activeFile?.filePath ?: "the active file"}\"? This will erase all text in this file and cannot be undone.",
+                    color = DiscordTextSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmDialog = false
+                        textFieldValue = TextFieldValue("", TextRange(0))
+                        viewModel.updateActiveFileContent("")
+                        viewModel.saveActiveFile()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordRed),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.testTag("btn_confirm_clear_code")
+                ) {
+                    Text("Clear All Code", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Cancel", color = DiscordTextSecondary)
+                }
+            },
+            shape = RoundedCornerShape(12.dp)
+        )
+    }
+
     // Project Files Bottom Sheet
     if (showFilesSheet) {
         ModalBottomSheet(
@@ -987,17 +1062,35 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             }
                         }
 
-                        if (!file.isEntrypoint) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                onClick = { viewModel.deleteFile(file) },
+                                onClick = {
+                                    viewModel.clearFileContent(file.id)
+                                    if (activeFile?.id == file.id) {
+                                        textFieldValue = TextFieldValue("", TextRange(0))
+                                    }
+                                },
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete",
-                                    tint = DiscordTextMuted,
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = "Clear Code",
+                                    tint = DiscordYellow,
                                     modifier = Modifier.size(18.dp)
                                 )
+                            }
+                            if (!file.isEntrypoint) {
+                                IconButton(
+                                    onClick = { viewModel.deleteFile(file) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = DiscordTextMuted,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }

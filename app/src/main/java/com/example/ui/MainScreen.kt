@@ -78,8 +78,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BotLanguage
-import com.example.ui.ai.AiStudioAssistantScreen
-import com.example.ui.ai.ApiKeysManagementScreen
 import com.example.ui.config.BotConfigScreen
 import com.example.ui.deploy.DeploymentScreen
 import com.example.ui.editor.CodeEditorScreen
@@ -307,8 +305,6 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                                         AppTab.STORAGE -> Icons.Default.Storage
                                         AppTab.EXTENSIONS -> Icons.Default.Extension
                                         AppTab.GRADLE -> Icons.Default.Build
-                                        AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome
-                                        AppTab.API_KEYS -> Icons.Default.Key
                                         AppTab.PACKAGES -> Icons.Default.Extension
                                         AppTab.BOT_CONFIG -> Icons.Default.Settings
                                         AppTab.DEPLOY -> Icons.Default.CloudUpload
@@ -358,8 +354,6 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                         AppTab.STORAGE -> Icons.Default.Storage to "Storage"
                         AppTab.EXTENSIONS -> Icons.Default.Extension to "Extensions"
                         AppTab.GRADLE -> Icons.Default.Build to "Gradle"
-                        AppTab.AI_ASSISTANT -> Icons.Default.AutoAwesome to "AI Studio"
-                        AppTab.API_KEYS -> Icons.Default.Key to "AI Keys"
                         AppTab.PACKAGES -> Icons.Default.Extension to "Install"
                         AppTab.BOT_CONFIG -> Icons.Default.Settings to "Config"
                         AppTab.DEPLOY -> Icons.Default.CloudUpload to "Deploy"
@@ -409,8 +403,6 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 AppTab.STORAGE -> AdvancedStorageScreen(viewModel)
                 AppTab.EXTENSIONS -> ExtensionsAndDynamicLoadingScreen(viewModel)
                 AppTab.GRADLE -> GradleConfigScreen(viewModel)
-                AppTab.AI_ASSISTANT -> AiStudioAssistantScreen(viewModel)
-                AppTab.API_KEYS -> ApiKeysManagementScreen()
                 AppTab.PACKAGES -> PackageInstallScreen(viewModel)
                 AppTab.BOT_CONFIG -> BotConfigScreen(viewModel)
                 AppTab.DEPLOY -> DeploymentScreen(viewModel)
@@ -610,37 +602,100 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     // Dialog: Create New File
     if (showNewFileDialog) {
         var newFileName by remember { mutableStateOf("") }
+        val extensionShortcuts = listOf(
+            ".js" to "JavaScript",
+            ".ts" to "TypeScript",
+            ".py" to "Python",
+            ".json" to "JSON",
+            ".env" to "ENV",
+            ".sql" to "SQL",
+            ".sh" to "Shell",
+            ".yaml" to "YAML",
+            ".toml" to "TOML",
+            ".html" to "HTML",
+            ".css" to "CSS",
+            ".kt" to "Kotlin",
+            ".lua" to "Lua",
+            ".md" to "Markdown"
+        )
         AlertDialog(
             onDismissRequest = { viewModel.showNewFileDialog.value = false },
             containerColor = DiscordSurface,
-            title = { Text("Create New File", color = DiscordTextPrimary) },
+            title = { Text("Create New File", color = DiscordTextPrimary, fontWeight = FontWeight.Bold) },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Enter file path (e.g. 'commands/kick.js', 'events/ready.py')",
+                        text = "Enter file path (e.g. 'commands/kick.js', 'events/ready.py'):",
                         color = DiscordTextSecondary,
                         fontSize = 12.sp
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = newFileName,
                         onValueChange = { newFileName = it },
-                        label = { Text("File Path") },
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = DiscordTextPrimary),
+                        label = { Text("File Name or Path") },
+                        placeholder = { Text("index.js") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DiscordTextPrimary,
+                            unfocusedTextColor = DiscordTextPrimary,
+                            focusedBorderColor = DiscordBlurple
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Text(
+                        text = "Quick File Type Shortcuts:",
+                        color = DiscordTextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        extensionShortcuts.forEach { (ext, label) ->
+                            Surface(
+                                color = DiscordElevated,
+                                shape = RoundedCornerShape(4.dp),
+                                modifier = Modifier.clickable {
+                                    val base = if (newFileName.isBlank()) "file" else newFileName.substringBeforeLast('.')
+                                    newFileName = "$base$ext"
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = ext,
+                                        color = DiscordBlurple,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = label,
+                                        color = DiscordTextSecondary,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         if (newFileName.isNotBlank()) {
-                            viewModel.createNewFile(newFileName)
+                            viewModel.createNewFile(newFileName.trim())
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
                 ) {
-                    Text("Create")
+                    Text("Create File")
                 }
             },
             dismissButton = {

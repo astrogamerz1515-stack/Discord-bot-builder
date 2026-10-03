@@ -12,16 +12,17 @@
 
 ## 📑 Master Feature Directory
 
-1. [📱 24/7 Background Execution Engine (Even When App/Phone Is Closed)](#1--247-background-execution-engine)
+1. [📱 24/7 Background Execution Engine (Runs Even When App/Phone Is Closed)](#1--247-background-execution-engine)
 2. [⚡ Slow Command Response Optimizer & Latency Diagnostics](#2--slow-command-response-optimizer--latency-diagnostics)
-3. [🧩 Scratch-Style Visual Builder (Master List)](#3--scratch-style-visual-builder)
-4. [💻 Real-Time Multi-Language Code Editor & IntelliSense](#4--real-time-multi-language-code-editor)
-5. [💬 Interactive Discord Simulator & Sandbox](#5--interactive-discord-simulator)
-6. [🎨 Visual Rich Embed Designer](#6--visual-rich-embed-designer)
-7. [🗄️ Local Room Database & Key-Value Datastore](#7--local-room-database--key-value-datastore)
-8. [🤖 AI Studio Gemini Assistant & Tools](#8--ai-studio-gemini-assistant)
-9. [🛠️ Interactive Terminal & Gateway Console](#9--interactive-terminal--gateway-console)
-10. [📦 Building the APK & CI/CD Workflow](#10--building-the-apk)
+3. [🧩 Scratch-Style Visual Builder (Master Improvement List)](#3--scratch-style-visual-builder)
+4. [💻 Real-Time Multi-Language Code Editor, IntelliSense & Expanded File Types](#4--real-time-multi-language-code-editor)
+5. [🧹 Clear Code Feature & File Content Management](#5--clear-code-feature--file-content-management)
+6. [🔍 Real-Time Code Diagnostics & Error Pinpointing System](#6--real-time-code-diagnostics--error-pinpointing-system)
+7. [💬 Interactive Discord Simulator & Sandbox](#7--interactive-discord-simulator)
+8. [🎨 Visual Rich Embed Designer](#8--visual-rich-embed-designer)
+9. [🗄️ Local Room Database & Key-Value Datastore](#9--local-room-database--key-value-datastore)
+10. [🛠️ Interactive Terminal & Gateway Console](#10--interactive-terminal--gateway-console)
+11. [📦 Building the APK & CI/CD Workflow](#11--building-the-apk)
 
 ---
 
@@ -204,53 +205,77 @@
 
 ---
 
-## 4. 💻 Real-Time Multi-Language Code Editor
-* **Languages**: Full syntax support for JavaScript (`Node.js`), Python (`discord.py`), TypeScript, Java, and Kotlin.
-* **IntelliSense Autocomplete**: Context-aware autocompletions for Discord.js & Discord.py methods, events, and classes.
-* **Signature Help Tooltips**: Real-time parameter hints for methods and constructors.
-* **Monospace Code Canvas**: High-performance text editor with line numbers, bracket pairing, and smooth debounced linting.
-* **Snippet Library**: Ready-to-use boilerplate templates for ping commands, embed senders, modal handlers, and event listeners.
+## 4. 💻 Real-Time Multi-Language Code Editor & Expanded File Types
+* **Extensive File Type Support**:
+  * **JavaScript & TypeScript**: `.js`, `.mjs`, `.cjs`, `.ts`, `.jsx`, `.tsx` (Node.js & Discord.js v14)
+  * **Python**: `.py` (discord.py >= 2.3.0)
+  * **Data & Config**: `.json`, `.yaml`, `.yml`, `.toml`, `.env`, `.properties`, `.ini`
+  * **Database & Scripts**: `.sql`, `.sh`, `.bash`, `.zsh`
+  * **Markup & Styles**: `.html`, `.htm`, `.css`, `.scss`, `.xml`, `.svg`, `.md`, `.txt`
+  * **Compiled & Systems**: `.kt`, `.kts`, `.java`, `.rs`, `.c`, `.h`, `.cpp`, `.hpp`, `.cs`, `.lua`, `.go`
+* **IntelliSense Autocomplete Engine**: Context-aware autocompletions for Discord.js & Discord.py methods, events, and classes with live suggestion shelf above the keyboard.
+* **Signature Help Tooltips**: Real-time parameter hints and active argument highlights while typing inside function calls.
+* **Smart Code Formatter**: One-tap Prettier-style auto-indentation and formatting for JavaScript, Python, JSON, and markup files.
+* **Quick Symbol Bar & Cursor Nav**: Generous touch targets for quick symbols (`(`, `)`, `{`, `}`, `=>`, `;`, `"`, `$`, etc.) and left/right cursor positioning buttons.
+* **Debounced Auto-Save**: Background file autosave with live status indicator.
+* **Quick File Type Generator**: Tap-to-create shortcuts for 14+ file extensions with automatic boilerplate generation.
 
 ---
 
-## 5. 💬 Interactive Discord Simulator
-* **Authentic Discord Dark Theme**: Test without needing a separate Discord client.
-* **Rich Message Component Rendering**: Interactive buttons (Primary, Secondary, Success, Danger) and String Select Menus.
-* **Rich Embed Visualizer**: Renders titles, descriptions, color strips, inline fields, and footers.
-* **Reaction System**: Add emoji reactions with dynamic counters.
-* **Slash Command Autocomplete**: Type `/` in the simulator to browse registered slash commands.
+## 5. 🧹 Clear Code Feature & File Content Management
+* **One-Tap Clear Code Button**: Dedicated "Clear Code" button in the editor toolbar (`btn_clear_code`) styled in safety-highlighted red.
+* **Safety Confirmation Dialog**: Prevents accidental clicks by requiring explicit user confirmation before wiping file contents.
+* **File Explorer Quick Clear**: Clean and reset code in any project file directly from the Project Files drawer sheet without needing to switch tabs.
+* **Terminal Audit Log**: Every code clearing action is timestamped and recorded in the terminal log for full traceability.
 
 ---
 
-## 6. 🎨 Visual Rich Embed Designer
-* **WYSIWYG Embed Builder**: Design custom rich embed cards visually.
-* **Color Customization**: Quick Discord palette presets (Blurple, Green, Yellow, Red) or custom hex inputs.
-* **Dynamic Fields**: Add, edit, remove, and reorder title/value field rows with inline toggles.
-* **Export to Code**: Instantly converts visual embed into clean Discord.js (`EmbedBuilder`) or Discord.py (`discord.Embed`) code.
+## 6. 🔍 Real-Time Code Diagnostics & Error Pinpointing System
+* **Exact Error Location Detection**: Real-time syntax and semantic validator that checks if code is wrong, pinpointing the **exact line number and column number** where the mistake occurred.
+* **Clear Error Explanations**: Diagnostic messages explain precisely *what* is wrong (e.g. missing `await` on interaction reply, unclosed brackets/braces/parentheses, malformed JSON keys, invalid `.env` syntax, unbalanced HTML tags, empty bot token).
+* **Editor Gutter & Line Indicators**:
+  * Red warning dots placed directly on erroneous line numbers in the editor gutter.
+  * Wavy red syntax error highlights under problematic code lines.
+* **Interactive Diagnostics Drawer**:
+  * Live status badge displaying error and warning count (e.g., `⚠️ 2 Errors, 1 Warning`).
+  * Tap to open a detailed diagnostic inspection drawer with full stack explanations.
+  * **One-Tap Jump**: Tapping any diagnostic item automatically scrolls the editor and jumps the cursor directly to the erroneous line and column.
+* **Non-Blocking Background Analysis**: Diagnostics run asynchronously on background dispatchers with typing debouncing to maintain 60 FPS UI responsiveness.
 
 ---
 
-## 7. 🗄️ Local Room Database & Key-Value Datastore
-* **Built-in Key-Value Store**: Built on Room SQLite for persistent bot data (user balances, warnings, custom prefixes).
-* **Live Data Browser**: View, add, edit, search, and delete database keys.
-* **JSON Import / Export**: Backup and restore bot database states across projects.
+## 7. 💬 Interactive Discord Simulator & Sandbox
+* **Authentic Discord Dark Theme**: Test commands and interactions without needing a real Discord test server or secondary device.
+* **Rich Message Component Rendering**: Interactive buttons (Primary, Secondary, Success, Danger) and String Select Menus with live feedback.
+* **Rich Embed Visualizer**: Complete Discord-spec card rendering with title, description, color side-strips, inline fields, timestamps, and footers.
+* **Reaction System**: Tap-to-react emoji picker with animated counter badges.
+* **Slash Command Autocomplete**: Type `/` in the simulator input box to search and execute registered slash commands.
 
 ---
 
-## 8. 🤖 AI Studio Gemini Assistant
-* **Gemini-Powered Code Assistant**: Chat with an AI assistant to generate bot commands, debug syntax errors, or explain Discord gateway events.
-* **API Key Pool**: Securely store and manage Google AI Studio and Discord developer credentials without hardcoding secrets.
+## 8. 🎨 Visual Rich Embed Designer
+* **WYSIWYG Embed Builder**: Visually construct Discord embed cards with live preview.
+* **Color Customization**: Presets for Discord Blurple, Green, Yellow, Red, or custom 6-digit hex values.
+* **Dynamic Field Management**: Add, modify, delete, and toggle inline states for up to 25 embed fields.
+* **One-Tap Code Export**: Generates copy-paste ready Discord.js (`EmbedBuilder`) or Discord.py (`discord.Embed`) code.
 
 ---
 
-## 9. 🛠️ Interactive Terminal & Gateway Console
+## 9. 🗄️ Local Room Database & Key-Value Datastore
+* **Persistent SQLite Storage**: Built on Android Room for storing persistent bot data (user balances, level XP, moderation warnings).
+* **Live Datastore Inspector**: Browse, search, add, and delete stored key-value records in real time.
+* **JSON Export & Import**: Backup and restore bot database states across projects.
+
+---
+
+## 10. 🛠️ Interactive Terminal & Gateway Console
 * **Color-Coded Streams**: Dedicated styling for `SYSTEM`, `STDOUT`, `STDERR`, `GATEWAY`, and `REST` output.
 * **Terminal Command History**: Navigate previous commands with history recall.
 * **Built-in Diagnostics**: Run `ping`, `status`, `shards`, and `clear` commands.
 
 ---
 
-## 10. 📦 Building the APK
+## 11. 📦 Building the APK
 
 ### Join Discord: [GAMERZ Realme](https://discord.gg/krEBKByEYu)
 

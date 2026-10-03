@@ -325,59 +325,8 @@ fun BotConfigScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        // Quick Navigation to AI Models & Keys Pool
+        // Slow Command Responses — Quick Fix List & Latency Diagnostics
         CommandResponseOptimizerCard(viewModel)
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DiscordSurface),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { viewModel.setTab(com.example.ui.AppTab.API_KEYS) }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Key,
-                        contentDescription = "Keys",
-                        tint = DiscordBlurple,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "AI Models & API Key Pool",
-                            color = DiscordTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "Configure Gemini, OpenAI, Claude, Groq & auto-failover on quota limits",
-                            color = DiscordTextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-                Surface(
-                    color = DiscordElevated,
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = "Manage →",
-                        color = DiscordTextPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-        }
 
         // Open Collaboration & Permissions Freedom Card
         var unrestrictedAccessEnabled by remember { mutableStateOf(true) }

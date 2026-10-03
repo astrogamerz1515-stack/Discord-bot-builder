@@ -32,8 +32,6 @@ enum class AppTab(val title: String, val iconName: String) {
     STORAGE("Storage Manager", "storage"),
     EXTENSIONS("Extensions", "extension"),
     GRADLE("Gradle", "build"),
-    AI_ASSISTANT("AI Studio", "auto_awesome"),
-    API_KEYS("AI Models & Keys", "key"),
     PACKAGES("Install", "extension"),
     BOT_CONFIG("Bot Config", "settings"),
     DEPLOY("Deploy", "cloud_upload")
@@ -354,13 +352,51 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun createNewFile(fileName: String) {
         val project = _currentProject.value ?: return
         viewModelScope.launch {
-            val fileId = repository.createFile(project.id, fileName, "")
+            val ext = fileName.substringAfterLast('.', "").lowercase()
+            val initialContent = when (ext) {
+                "js" -> "// Discord.js Command\nmodule.exports = {\n  name: '${fileName.substringBeforeLast('.')}',\n  description: 'Custom command',\n  async execute(message, args) {\n    await message.reply('Command executed successfully!');\n  }\n};\n"
+                "ts" -> "// TypeScript Discord.js Command\nimport { Message } from 'discord.js';\n\nexport const name = '${fileName.substringBeforeLast('.')}';\nexport const description = 'Custom command';\nexport async function execute(message: Message, args: string[]) {\n  await message.reply('Executed via TypeScript!');\n}\n"
+                "py" -> "# discord.py Extension\nimport discord\nfrom discord.ext import commands\n\nclass CustomCommand(commands.Cog):\n    def __init__(self, bot):\n        self.bot = bot\n\n    @commands.command(name='${fileName.substringBeforeLast('.')}')\n    async def custom_command(self, ctx):\n        await ctx.send('Command response from Python!')\n\nasync def setup(bot):\n    await bot.add_cog(CustomCommand(bot))\n"
+                "json" -> "{\n  \"name\": \"${fileName.substringBeforeLast('.')}\",\n  \"version\": \"1.0.0\",\n  \"enabled\": true\n}\n"
+                "env" -> "# Environment Variables\nDISCORD_TOKEN=${project.botToken}\nCLIENT_ID=${project.clientId}\nPREFIX=${project.prefix}\n"
+                "sql" -> "-- SQL Schema / Query File\nCREATE TABLE IF NOT EXISTS users (\n  id TEXT PRIMARY KEY,\n  username TEXT,\n  points INTEGER DEFAULT 0\n);\n"
+                "sh", "bash" -> "#!/bin/bash\n# Automation script\necho \"Running script for ${project.name}...\"\n"
+                "yaml", "yml" -> "# YAML Configuration\nsettings:\n  enabled: true\n  prefix: \"${project.prefix}\"\n"
+                "toml" -> "# TOML Configuration\n[bot]\nname = \"${project.name}\"\nprefix = \"${project.prefix}\"\n"
+                "html", "htm" -> "<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <title>${project.name} Dashboard</title>\n</head>\n<body>\n  <h1>${project.name} Bot Status: Online</h1>\n</body>\n</html>\n"
+                "css" -> "/* Stylesheet */\nbody {\n  background-color: #0e1015;\n  color: #f2f3f5;\n  font-family: sans-serif;\n}\n"
+                "kt", "kts" -> "// Kotlin script\nfun main() {\n    println(\"Bot helper running\")\n}\n"
+                "lua" -> "-- Lua Discordia command\nlocal custom = {}\nfunction custom.run(message)\n    message:reply(\"Executed via Lua\")\nend\nreturn custom\n"
+                "md" -> "# ${fileName.substringBeforeLast('.')}\n\nDocumentation and notes for ${project.name}.\n"
+                else -> ""
+            }
+            val fileId = repository.createFile(project.id, fileName, initialContent)
             val created = repository.getFileById(fileId)
             showNewFileDialog.value = false
             if (created != null) {
                 selectFile(created)
                 _currentTab.value = AppTab.EDITOR
             }
+        }
+    }
+
+    fun clearActiveFile() {
+        val file = _activeFile.value ?: return
+        clearFileContent(file.id)
+    }
+
+    fun clearFileContent(fileId: Long) {
+        val project = _currentProject.value ?: return
+        viewModelScope.launch {
+            val target = _projectFiles.value.firstOrNull { it.id == fileId }
+            if (target != null) {
+                repository.saveFile(target.copy(content = ""))
+            }
+            if (_activeFile.value?.id == fileId) {
+                _activeFileContent.value = ""
+                _saveStatus.value = "Cleared"
+            }
+            repository.addTerminalLog(project.id, "[EDITOR] Cleared content for file id $fileId", "STDOUT")
         }
     }
 
