@@ -1,5 +1,8 @@
 package com.example.ui.editor
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -65,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -139,6 +144,25 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         }
     }
 
+    val context = LocalContext.current
+
+    // Launcher for importing an external code file into the current project
+    val fileImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importSingleFileToProject(uri, context) { success, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val isBinaryFile = remember(activeFile?.filePath, fileContent) {
+        val ext = activeFile?.filePath?.substringAfterLast('.', "")?.lowercase() ?: ""
+        val binaryExts = setOf("png", "jpg", "jpeg", "gif", "ico", "webp", "mp3", "wav", "zip", "pdf", "exe", "db", "sqlite")
+        binaryExts.contains(ext) || fileContent.take(500).any { it == '\u0000' }
+    }
+
     val cursorPosition = textFieldValue.selection.end.coerceIn(0, textFieldValue.text.length)
     val isPython = activeFile?.filePath?.endsWith(".py", ignoreCase = true) == true
 
@@ -151,21 +175,35 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         line to col
     }
 
-    // Compute dynamic IntelliSense completions
-    val completions = remember(textFieldValue.text, cursorPosition, activeFile?.filePath) {
-        IntelliSenseEngine.computeCompletions(
-            code = textFieldValue.text,
-            cursorIndex = cursorPosition,
-            filePath = activeFile?.filePath ?: "index.js"
-        )
+    // Compute dynamic IntelliSense completions with safety bounds
+    val completions = remember(textFieldValue.text, cursorPosition, activeFile?.filePath, isBinaryFile) {
+        if (isBinaryFile || textFieldValue.text.length > 250_000) emptyList()
+        else {
+            try {
+                IntelliSenseEngine.computeCompletions(
+                    code = textFieldValue.text,
+                    cursorIndex = cursorPosition,
+                    filePath = activeFile?.filePath ?: "index.js"
+                )
+            } catch (_: Throwable) {
+                emptyList()
+            }
+        }
     }
 
-    // Compute active function signature help
-    val signatureHelp = remember(textFieldValue.text, cursorPosition) {
-        IntelliSenseEngine.computeSignatureHelp(
-            code = textFieldValue.text,
-            cursorIndex = cursorPosition
-        )
+    // Compute active function signature help with safety bounds
+    val signatureHelp = remember(textFieldValue.text, cursorPosition, isBinaryFile) {
+        if (isBinaryFile || textFieldValue.text.length > 250_000) null
+        else {
+            try {
+                IntelliSenseEngine.computeSignatureHelp(
+                    code = textFieldValue.text,
+                    cursorIndex = cursorPosition
+                )
+            } catch (_: Throwable) {
+                null
+            }
+        }
     }
 
     fun applyCompletionItem(item: CompletionItem) {
@@ -638,97 +676,177 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         }
 
         // Code Editor Body with Line Numbers
-        val lines = remember(textFieldValue.text) { textFieldValue.text.lines() }
-        val lineCount = lines.size.coerceAtLeast(1)
-        val scrollState = rememberScrollState()
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .background(TerminalBg)
-                .verticalScroll(scrollState)
-        ) {
-            // Line numbers column with active line highlight and error indicators
-            val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
-
-            Column(
+        if (files.isEmpty()) {
+            Box(
                 modifier = Modifier
-                    .background(DiscordDarker)
-                    .border(
-                        width = 0.5.dp,
-                        color = DiscordHover,
-                        shape = RoundedCornerShape(0.dp)
-                    )
-                    .padding(vertical = 8.dp, horizontal = 6.dp)
-                    .width(48.dp),
-                horizontalAlignment = Alignment.End
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(TerminalBg)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
             ) {
-                for (i in 1..lineCount) {
-                    val hasError = errorLines.contains(i)
-                    val isCurrentLine = i == currentLineAndCol.first
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (hasError) {
-                            Text(
-                                text = "●",
-                                color = DiscordRed,
-                                fontSize = 9.sp,
-                                modifier = Modifier.padding(end = 4.dp)
-                            )
-                        } else if (isCurrentLine) {
-                            Text(
-                                text = "›",
-                                color = DiscordBlurple,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(end = 2.dp)
-                            )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Folder, contentDescription = null, tint = DiscordTextMuted, modifier = Modifier.size(48.dp))
+                    Text("No Files in this Bot Project", color = DiscordTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Create a new file or import existing bot code (.js, .py, .json, etc.) to get started.", color = DiscordTextSecondary, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { fileImportLauncher.launch(arrayOf("*/*")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Import File")
                         }
-                        Text(
-                            text = "$i",
-                            color = if (hasError) DiscordRed
-                            else if (isCurrentLine) DiscordBlurple
-                            else DiscordTextMuted,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = if (hasError || isCurrentLine) FontWeight.Bold else FontWeight.Normal,
-                            lineHeight = 20.sp
-                        )
+                        Button(
+                            onClick = { viewModel.showNewFileDialog.value = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("New File", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
-
-            // Editor content text field with IntelliSense trigger on value change
+        } else if (isBinaryFile) {
             Box(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .weight(1f)
-                    .padding(8.dp)
+                    .background(TerminalBg)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
             ) {
-                BasicTextField(
-                    value = textFieldValue,
-                    onValueChange = { newValue ->
-                        textFieldValue = newValue
-                        viewModel.updateActiveFileContent(newValue.text)
-                        showIntelliSenseBar = true
-                        showSignatureHelp = true
-                    },
-                    visualTransformation = syntaxTransformation,
-                    textStyle = TextStyle(
-                        color = DiscordTextPrimary,
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 20.sp
-                    ),
-                    cursorBrush = SolidColor(DiscordBlurple),
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Binary File Detected", color = DiscordYellow, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("File '${activeFile?.filePath}' contains binary data and cannot be displayed in text editor.", color = DiscordTextSecondary, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+            }
+        } else {
+            val lines = remember(textFieldValue.text) { textFieldValue.text.lines() }
+            val lineCount = lines.size.coerceAtLeast(1)
+            val scrollState = rememberScrollState()
+
+            val lineNumbersString = remember(lineCount) {
+                val sb = StringBuilder(lineCount * 6)
+                for (i in 1..lineCount) {
+                    if (i > 1) sb.append('\n')
+                    sb.append(i)
+                }
+                sb.toString()
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(TerminalBg)
+                    .verticalScroll(scrollState)
+            ) {
+                // Line numbers column with active line highlight and error indicators
+                val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
+
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("code_editor_input")
-                )
+                        .background(DiscordDarker)
+                        .border(
+                            width = 0.5.dp,
+                            color = DiscordHover,
+                            shape = RoundedCornerShape(0.dp)
+                        )
+                        .padding(vertical = 8.dp, horizontal = 6.dp)
+                        .widthIn(min = 40.dp),
+                    contentAlignment = Alignment.TopEnd
+                ) {
+                    if (lineCount <= 200) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            for (i in 1..lineCount) {
+                                val hasError = errorLines.contains(i)
+                                val isCurrentLine = i == currentLineAndCol.first
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    if (hasError) {
+                                        Text(
+                                            text = "●",
+                                            color = DiscordRed,
+                                            fontSize = 9.sp,
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        )
+                                    } else if (isCurrentLine) {
+                                        Text(
+                                            text = "›",
+                                            color = DiscordBlurple,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(end = 2.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = "$i",
+                                        color = if (hasError) DiscordRed
+                                        else if (isCurrentLine) DiscordBlurple
+                                        else DiscordTextMuted,
+                                        fontSize = 13.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = if (hasError || isCurrentLine) FontWeight.Bold else FontWeight.Normal,
+                                        lineHeight = 20.sp
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // High-performance single-Text rendering for large files (prevents Compose slot table OOM)
+                        Text(
+                            text = lineNumbersString,
+                            color = DiscordTextMuted,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 20.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End
+                        )
+                    }
+                }
+
+                // Editor content text field with IntelliSense trigger on value change
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(8.dp)
+                ) {
+                    BasicTextField(
+                        value = textFieldValue,
+                        onValueChange = { newValue ->
+                            textFieldValue = newValue
+                            viewModel.updateActiveFileContent(newValue.text)
+                            showIntelliSenseBar = true
+                            showSignatureHelp = true
+                        },
+                        visualTransformation = syntaxTransformation,
+                        textStyle = TextStyle(
+                            color = DiscordTextPrimary,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 20.sp
+                        ),
+                        cursorBrush = SolidColor(DiscordBlurple),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("code_editor_input")
+                    )
+                }
             }
         }
 
@@ -1002,17 +1120,34 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Button(
-                        onClick = {
-                            showFilesSheet = false
-                            viewModel.showNewFileDialog.value = true
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add File", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("New File", fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                showFilesSheet = false
+                                fileImportLauncher.launch(arrayOf("*/*"))
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordElevated),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.testTag("btn_import_code_file")
+                        ) {
+                            Icon(imageVector = Icons.Default.Upload, contentDescription = "Import File", tint = DiscordTextPrimary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Import File", color = DiscordTextPrimary, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                showFilesSheet = false
+                                viewModel.showNewFileDialog.value = true
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.testTag("btn_new_code_file")
+                        ) {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = "Add File", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New File", fontSize = 12.sp)
+                        }
                     }
                 }
 

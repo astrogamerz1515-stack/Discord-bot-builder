@@ -19,15 +19,32 @@ import com.example.ui.theme.SyntaxType
 
 class SyntaxHighlightTransformation(private val filePath: String) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
-        val highlighted = SyntaxHighlighter.highlight(text.text, filePath)
-        return TransformedText(
-            text = highlighted,
-            offsetMapping = OffsetMapping.Identity
-        )
+        return try {
+            val highlighted = SyntaxHighlighter.highlight(text.text, filePath)
+            TransformedText(
+                text = highlighted,
+                offsetMapping = OffsetMapping.Identity
+            )
+        } catch (_: Throwable) {
+            TransformedText(
+                text = text,
+                offsetMapping = OffsetMapping.Identity
+            )
+        }
     }
 }
 
 object SyntaxHighlighter {
+
+    private const val MAX_HIGHLIGHT_CHARS = 60_000
+
+    // Precompiled Static Regexes to avoid per-line instantiation overhead
+    private val STRING_REGEX = Regex("(\"[^\"]*\"|'[^']*'|`[^`]*`)")
+    private val TAG_REGEX = Regex("</?[A-Za-z0-9_-]+(\\s+[^>]*)?>?")
+    private val DECORATOR_REGEX = Regex("(@[A-Za-z_][A-Za-z0-9_.]*|#[a-zA-Z_]+)")
+    private val FUNC_CALL_REGEX = Regex("\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()")
+    private val WORD_REGEX = Regex("\\b[A-Za-z_][A-Za-z0-9_]*\\b")
+    private val NUMBER_REGEX = Regex("\\b(0x[0-9a-fA-F]+|\\d+(\\.\\d+)?)\\b")
 
     private val JS_KEYWORDS = setOf(
         "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
@@ -127,6 +144,16 @@ object SyntaxHighlighter {
         "ChatInputCommandInteraction", "ButtonInteraction", "SelectMenuInteraction"
     )
 
+    private fun AnnotatedString.Builder.safeAddStyle(style: SpanStyle, start: Int, end: Int, maxLen: Int) {
+        val s = start.coerceIn(0, maxLen)
+        val e = end.coerceIn(0, maxLen)
+        if (s < e) {
+            try {
+                addStyle(style, s, e)
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun highlight(code: String, filePath: String): AnnotatedString {
         if (code.isEmpty()) return AnnotatedString("")
         val extension = filePath.substringAfterLast('.', "").lowercase()
@@ -134,32 +161,42 @@ object SyntaxHighlighter {
         return buildAnnotatedString {
             append(code)
 
-            val lines = code.lines()
-            var currentOffset = 0
+            val codeLen = code.length
+            val limit = minOf(codeLen, MAX_HIGHLIGHT_CHARS)
 
-            for (line in lines) {
+            var lineStart = 0
+            while (lineStart < limit) {
+                var lineEnd = code.indexOf('\n', lineStart)
+                val nextLineStart = if (lineEnd != -1) lineEnd + 1 else codeLen
+                if (lineEnd == -1 || lineEnd > limit) {
+                    lineEnd = minOf(if (lineEnd == -1) codeLen else lineEnd, limit)
+                }
+
+                // Exclude '\r' if present before '\n'
+                val actualLineEnd = if (lineEnd > lineStart && code[lineEnd - 1] == '\r') lineEnd - 1 else lineEnd
+                val line = code.substring(lineStart, actualLineEnd)
                 val trimmed = line.trimStart()
 
                 // Special handling for Markdown (.md)
                 if (extension == "md") {
-                    highlightMarkdownLine(line, currentOffset, this)
-                    currentOffset += line.length + 1
+                    highlightMarkdownLine(line, lineStart, this, codeLen)
+                    lineStart = nextLineStart
                     continue
                 }
 
                 // Special handling for Environment files (.env)
                 if (extension == "env" || extension == "properties") {
-                    highlightEnvLine(line, currentOffset, this)
-                    currentOffset += line.length + 1
+                    highlightEnvLine(line, lineStart, this, codeLen)
+                    lineStart = nextLineStart
                     continue
                 }
 
                 // Check for single-line comments
                 if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("--") || trimmed.startsWith("<!--")) {
-                    val start = currentOffset + (line.length - trimmed.length)
-                    val end = currentOffset + line.length
-                    addStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), start, end)
-                    currentOffset += line.length + 1
+                    val start = lineStart + (line.length - trimmed.length)
+                    val end = lineStart + line.length
+                    safeAddStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), start, end, codeLen)
+                    lineStart = nextLineStart
                     continue
                 }
 
@@ -168,114 +205,112 @@ object SyntaxHighlighter {
                 val codeSegment = if (commentIndex != -1) line.substring(0, commentIndex) else line
 
                 if (commentIndex != -1) {
-                    val start = currentOffset + commentIndex
-                    val end = currentOffset + line.length
-                    addStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), start, end)
+                    val start = lineStart + commentIndex
+                    val end = lineStart + line.length
+                    safeAddStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), start, end, codeLen)
                 }
 
                 // Match strings (single, double quotes, backticks)
-                val stringRegex = Regex("(\"[^\"]*\"|'[^']*'|`[^`]*`)")
-                for (match in stringRegex.findAll(codeSegment)) {
-                    val start = currentOffset + match.range.first
-                    val end = currentOffset + match.range.last + 1
-                    addStyle(SpanStyle(color = SyntaxString), start, end)
+                for (match in STRING_REGEX.findAll(codeSegment)) {
+                    val start = lineStart + match.range.first
+                    val end = lineStart + match.range.last + 1
+                    safeAddStyle(SpanStyle(color = SyntaxString), start, end, codeLen)
                 }
 
                 // Match HTML/XML tags <tag> and </tag>
                 if (extension in listOf("html", "htm", "xml", "svg", "jsx", "tsx")) {
-                    val tagRegex = Regex("</?[A-Za-z0-9_-]+(\\s+[^>]*)?>?")
-                    for (match in tagRegex.findAll(codeSegment)) {
-                        val start = currentOffset + match.range.first
-                        val end = currentOffset + match.range.last + 1
-                        addStyle(SpanStyle(color = SyntaxFunction, fontWeight = FontWeight.Bold), start, end)
+                    for (match in TAG_REGEX.findAll(codeSegment)) {
+                        val start = lineStart + match.range.first
+                        val end = lineStart + match.range.last + 1
+                        safeAddStyle(SpanStyle(color = SyntaxFunction, fontWeight = FontWeight.Bold), start, end, codeLen)
                     }
                 }
 
                 // Match Decorators / Directives (@decorator, #include, etc.)
-                val decoratorRegex = Regex("(@[A-Za-z_][A-Za-z0-9_.]*|#[a-zA-Z_]+)")
-                for (match in decoratorRegex.findAll(codeSegment)) {
-                    val start = currentOffset + match.range.first
-                    val end = currentOffset + match.range.last + 1
-                    addStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.SemiBold), start, end)
+                for (match in DECORATOR_REGEX.findAll(codeSegment)) {
+                    val start = lineStart + match.range.first
+                    val end = lineStart + match.range.last + 1
+                    safeAddStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.SemiBold), start, end, codeLen)
                 }
 
                 // Match function calls like client.on(...), interaction.reply(...), print(...)
-                val funcCallRegex = Regex("\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()")
-                for (match in funcCallRegex.findAll(codeSegment)) {
+                for (match in FUNC_CALL_REGEX.findAll(codeSegment)) {
                     val funcName = match.groupValues[1]
                     if (!isKeyword(funcName, extension)) {
-                        val start = currentOffset + match.range.first
-                        val end = currentOffset + match.range.first + funcName.length
-                        addStyle(SpanStyle(color = SyntaxFunction), start, end)
+                        val start = lineStart + match.range.first
+                        val end = lineStart + match.range.first + funcName.length
+                        safeAddStyle(SpanStyle(color = SyntaxFunction), start, end, codeLen)
                     }
                 }
 
                 // Match words: keywords, Discord entities, booleans, types
-                val wordRegex = Regex("\\b[A-Za-z_][A-Za-z0-9_]*\\b")
-                for (match in wordRegex.findAll(codeSegment)) {
+                for (match in WORD_REGEX.findAll(codeSegment)) {
                     val word = match.value
-                    val start = currentOffset + match.range.first
-                    val end = currentOffset + match.range.last + 1
+                    val start = lineStart + match.range.first
+                    val end = lineStart + match.range.last + 1
 
                     when {
                         BOOLEANS_NULLS.contains(word) -> {
-                            addStyle(SpanStyle(color = SyntaxNumber, fontWeight = FontWeight.Bold), start, end)
+                            safeAddStyle(SpanStyle(color = SyntaxNumber, fontWeight = FontWeight.Bold), start, end, codeLen)
                         }
                         DISCORD_TERMS.contains(word) -> {
-                            addStyle(SpanStyle(color = SyntaxDiscord, fontWeight = FontWeight.Bold), start, end)
+                            safeAddStyle(SpanStyle(color = SyntaxDiscord, fontWeight = FontWeight.Bold), start, end, codeLen)
                         }
                         isKeyword(word, extension) -> {
-                            addStyle(SpanStyle(color = SyntaxKeyword, fontWeight = FontWeight.Bold), start, end)
+                            safeAddStyle(SpanStyle(color = SyntaxKeyword, fontWeight = FontWeight.Bold), start, end, codeLen)
                         }
                         word.firstOrNull()?.isUpperCase() == true -> {
-                            addStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Medium), start, end)
+                            safeAddStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Medium), start, end, codeLen)
                         }
                     }
                 }
 
                 // Match numbers (integers, floats, hex)
-                val numberRegex = Regex("\\b(0x[0-9a-fA-F]+|\\d+(\\.\\d+)?)\\b")
-                for (match in numberRegex.findAll(codeSegment)) {
-                    val start = currentOffset + match.range.first
-                    val end = currentOffset + match.range.last + 1
-                    addStyle(SpanStyle(color = SyntaxNumber), start, end)
+                for (match in NUMBER_REGEX.findAll(codeSegment)) {
+                    val start = lineStart + match.range.first
+                    val end = lineStart + match.range.last + 1
+                    safeAddStyle(SpanStyle(color = SyntaxNumber), start, end, codeLen)
                 }
 
-                currentOffset += line.length + 1
+                lineStart = nextLineStart
             }
         }
     }
 
-    private fun highlightMarkdownLine(line: String, offset: Int, builder: AnnotatedString.Builder) {
+    private fun highlightMarkdownLine(line: String, offset: Int, builder: AnnotatedString.Builder, maxLen: Int) {
         val trimmed = line.trimStart()
+        val end = offset + line.length
         when {
             trimmed.startsWith("#") -> {
-                builder.addStyle(SpanStyle(color = SyntaxFunction, fontWeight = FontWeight.Bold), offset, offset + line.length)
+                builder.safeAddStyle(SpanStyle(color = SyntaxFunction, fontWeight = FontWeight.Bold), offset, end, maxLen)
             }
             trimmed.startsWith("```") -> {
-                builder.addStyle(SpanStyle(color = SyntaxKeyword, fontWeight = FontWeight.Bold), offset, offset + line.length)
+                builder.safeAddStyle(SpanStyle(color = SyntaxKeyword, fontWeight = FontWeight.Bold), offset, end, maxLen)
             }
             trimmed.startsWith(">") -> {
-                builder.addStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), offset, offset + line.length)
+                builder.safeAddStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), offset, end, maxLen)
             }
             trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("1. ") -> {
-                builder.addStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Medium), offset, offset + line.length)
+                builder.safeAddStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Medium), offset, end, maxLen)
             }
         }
     }
 
-    private fun highlightEnvLine(line: String, offset: Int, builder: AnnotatedString.Builder) {
+    private fun highlightEnvLine(line: String, offset: Int, builder: AnnotatedString.Builder, maxLen: Int) {
         val trimmed = line.trim()
+        val lineEnd = offset + line.length
         if (trimmed.startsWith("#")) {
-            builder.addStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), offset, offset + line.length)
+            builder.safeAddStyle(SpanStyle(color = SyntaxComment, fontStyle = FontStyle.Italic), offset, lineEnd, maxLen)
             return
         }
         val eqIdx = line.indexOf('=')
         if (eqIdx != -1) {
             // Key
-            builder.addStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Bold), offset, offset + eqIdx)
+            builder.safeAddStyle(SpanStyle(color = SyntaxType, fontWeight = FontWeight.Bold), offset, offset + eqIdx, maxLen)
             // Value
-            builder.addStyle(SpanStyle(color = SyntaxString), offset + eqIdx + 1, offset + line.length)
+            if (eqIdx + 1 < line.length) {
+                builder.safeAddStyle(SpanStyle(color = SyntaxString), offset + eqIdx + 1, lineEnd, maxLen)
+            }
         }
     }
 

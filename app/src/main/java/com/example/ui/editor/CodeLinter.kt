@@ -22,8 +22,10 @@ object CodeLinter {
 
     fun lintCode(code: String, filePath: String): List<CodeDiagnostic> {
         val diagnostics = mutableListOf<CodeDiagnostic>()
-        val lines = code.lines()
-        val extension = filePath.substringAfterLast('.', "").lowercase()
+        if (code.isBlank()) return diagnostics
+        return try {
+            val lines = code.lines()
+            val extension = filePath.substringAfterLast('.', "").lowercase()
 
         // 1. JSON-specific validation with exact line & column detection
         if (extension == "json") {
@@ -276,7 +278,10 @@ object CodeLinter {
             )
         }
 
-        return diagnostics
+            diagnostics
+        } catch (_: Throwable) {
+            diagnostics
+        }
     }
 
     private fun lintJson(code: String, lines: List<String>, diagnostics: MutableList<CodeDiagnostic>) {

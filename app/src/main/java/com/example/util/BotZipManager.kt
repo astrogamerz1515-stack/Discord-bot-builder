@@ -70,6 +70,77 @@ object BotZipManager {
         "desktop.ini"
     )
 
+    private val BINARY_EXTENSIONS = setOf(
+        "png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "tiff",
+        "mp3", "wav", "ogg", "flac", "m4a", "aac",
+        "zip", "tar", "gz", "7z", "rar", "bz2", "xz",
+        "pdf", "exe", "bin", "so", "dll", "dylib",
+        "db", "sqlite", "sqlite3", "pyc", "pyo", "pyd", "class", "jar", "wasm", "node"
+    )
+
+    /**
+     * Versatile parser that handles either a ZIP archive of bot files,
+     * OR a single source code file (.js, .ts, .py, .json, .env, .txt, etc.).
+     */
+    fun parseImportBytes(bytes: ByteArray, fallbackName: String = "Imported Bot"): ParsedBotPackage {
+        // Attempt ZIP decompression first
+        try {
+            val bais = java.io.ByteArrayInputStream(bytes)
+            val pkg = parseZipStream(bais, fallbackName)
+            if (pkg.files.isNotEmpty()) {
+                return pkg
+            }
+        } catch (_: Exception) {}
+
+        // Fallback: Parse as a single code file
+        return parseSingleFile(bytes, fallbackName)
+    }
+
+    private fun parseSingleFile(bytes: ByteArray, fileName: String): ParsedBotPackage {
+        val cleanContent = String(bytes, StandardCharsets.UTF_8)
+            .removePrefix("\uFEFF")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val detectedLanguage = when (ext) {
+            "py" -> BotLanguage.PYTHON
+            "ts" -> BotLanguage.TYPESCRIPT
+            "rs" -> BotLanguage.RUST
+            "go" -> BotLanguage.GO
+            "java" -> BotLanguage.JAVA
+            "cs" -> BotLanguage.CSHARP
+            else -> BotLanguage.JAVASCRIPT
+        }
+
+        val baseName = fileName.substringBeforeLast('.').ifBlank { "Imported Bot" }
+            .replace("-", " ").replace("_", " ").capitalizeWords()
+
+        val rawFile = RawZipFile(fileName, cleanContent, bytes.size.toLong())
+        val (token, prefix, clientId) = extractConfigSecrets(listOf(rawFile))
+
+        val botFile = BotFile(
+            projectId = 0,
+            filePath = fileName,
+            content = cleanContent,
+            isEntrypoint = true,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        return ParsedBotPackage(
+            name = baseName,
+            description = "Imported ${detectedLanguage.displayName} Discord bot file",
+            language = detectedLanguage.name,
+            prefix = prefix.ifBlank { "!" },
+            botToken = token,
+            clientId = clientId,
+            status = "Online",
+            activityType = "PLAYING",
+            activityText = "${prefix.ifBlank { "!" }} help | ${detectedLanguage.displayName}",
+            files = listOf(botFile)
+        )
+    }
+
     /**
      * Reads a ZIP input stream and parses all bot files and project metadata.
      * Handles single-folder GitHub archives by automatically flattening root folder prefixes.
@@ -89,9 +160,11 @@ object BotZipManager {
                 if (!entry.isDirectory && !rawName.contains("../")) {
                     val cleanPath = rawName.trimStart('/')
                     val lowerPath = cleanPath.lowercase()
+                    val ext = cleanPath.substringAfterLast('.', "").lowercase()
 
                     val isIgnored = IGNORED_PREFIXES.any { lowerPath.startsWith(it) || lowerPath.contains("/$it") } ||
-                            IGNORED_FILENAMES.contains(lowerPath.substringAfterLast('/'))
+                            IGNORED_FILENAMES.contains(lowerPath.substringAfterLast('/')) ||
+                            BINARY_EXTENSIONS.contains(ext)
 
                     if (!isIgnored) {
                         val buffer = ByteArrayOutputStream()
@@ -107,9 +180,17 @@ object BotZipManager {
                             buffer.write(chunk, 0, bytesRead)
                         }
 
-                        val contentStr = String(buffer.toByteArray(), StandardCharsets.UTF_8)
-                        rawFiles.add(RawZipFile(cleanPath, contentStr, currentSize))
-                        count++
+                        val rawBytes = buffer.toByteArray()
+                        val hasNulByte = rawBytes.take(1024).any { it == 0.toByte() }
+
+                        if (!hasNulByte) {
+                            val contentStr = String(rawBytes, StandardCharsets.UTF_8)
+                                .removePrefix("\uFEFF")
+                                .replace("\r\n", "\n")
+                                .replace("\r", "\n")
+                            rawFiles.add(RawZipFile(cleanPath, contentStr, currentSize))
+                            count++
+                        }
                     }
                 }
                 zipIn.closeEntry()
@@ -362,6 +443,7 @@ object BotZipManager {
 
         return if (allShareRoot) {
             files.map { it.copy(path = it.path.removePrefix(candidateRoot)) }
+                .filter { it.path.isNotBlank() }
         } else {
             files
         }

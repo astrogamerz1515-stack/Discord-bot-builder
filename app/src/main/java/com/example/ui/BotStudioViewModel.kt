@@ -386,10 +386,14 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 } catch (_: Exception) {}
 
-                val inputStream = contentResolver.openInputStream(uri)
-                    ?: throw IllegalArgumentException("Could not open ZIP stream from selected file")
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalArgumentException("Could not read selected file")
 
-                val parsed = com.example.util.BotZipManager.parseZipStream(inputStream, fileName)
+                val parsed = com.example.util.BotZipManager.parseImportBytes(bytes, fileName)
+
+                if (parsed.files.isEmpty()) {
+                    throw IllegalArgumentException("No readable source code files found in selected archive or file.")
+                }
 
                 val newProject = BotProject(
                     name = parsed.name,
@@ -411,11 +415,63 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                         selectProject(created)
                         _currentTab.value = AppTab.EDITOR
                     }
-                    onResult(true, "Successfully imported '${parsed.name}' with ${parsed.files.size} files!", created)
+                    onResult(true, "Successfully imported '${parsed.name}' (${parsed.files.size} file${if (parsed.files.size == 1) "" else "s"})!", created)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     onResult(false, "Import failed: ${e.localizedMessage ?: "Unknown error"}", null)
+                }
+            }
+        }
+    }
+
+    fun importSingleFileToProject(
+        uri: Uri,
+        context: Context,
+        onResult: ((Boolean, String) -> Unit)? = null
+    ) {
+        val proj = _currentProject.value ?: run {
+            onResult?.invoke(false, "No active project selected")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val contentResolver = context.contentResolver
+                var fileName = "imported_file.js"
+                try {
+                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex != -1 && cursor.moveToFirst()) {
+                            val resolved = cursor.getString(nameIndex)
+                            if (!resolved.isNullOrBlank()) {
+                                fileName = resolved
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalArgumentException("Could not read file")
+
+                val cleanContent = String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                    .removePrefix("\uFEFF")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+
+                val cleanPath = fileName.trimStart('/')
+                val newFileId = repository.createFile(proj.id, cleanPath, cleanContent)
+                val createdFile = repository.getFileById(newFileId)
+
+                withContext(Dispatchers.Main) {
+                    if (createdFile != null) {
+                        selectFile(createdFile)
+                    }
+                    onResult?.invoke(true, "Imported '$cleanPath' successfully!")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult?.invoke(false, "Failed to import file: ${e.localizedMessage ?: "Unknown error"}")
                 }
             }
         }
