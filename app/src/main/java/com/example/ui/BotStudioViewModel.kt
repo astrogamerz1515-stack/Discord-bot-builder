@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.database.AppDatabase
@@ -11,6 +13,7 @@ import com.example.data.model.SavedEmbed
 import com.example.data.model.TerminalLog
 import com.example.data.repository.BotRepository
 import com.example.engine.BotRuntimeEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -164,10 +168,19 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             stopBotProcess()
         }
 
+        val prefs = com.example.service.BotBackgroundService.getPrefs(application)
+        val savedRunningId = prefs.getLong(com.example.service.BotBackgroundService.PREF_PROJECT_ID, 0L)
+        val isMarkedRunning = prefs.getBoolean(com.example.service.BotBackgroundService.PREF_IS_RUNNING, false)
+
         viewModelScope.launch {
             allProjects.collect { projects ->
                 if (_currentProject.value == null && projects.isNotEmpty()) {
-                    selectProject(projects.first())
+                    val target = if (isMarkedRunning && savedRunningId > 0) {
+                        projects.find { it.id == savedRunningId } ?: projects.first()
+                    } else {
+                        projects.first()
+                    }
+                    selectProject(target)
                 }
             }
         }
@@ -313,6 +326,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveActiveFile() {
         val file = _activeFile.value ?: return
         val currentContent = _activeFileContent.value
+        runtimeEngine.invalidateFileCache(file.projectId)
         viewModelScope.launch {
             val updatedFile = file.copy(content = currentContent)
             repository.saveFile(updatedFile)
@@ -348,6 +362,123 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                 _currentTab.value = AppTab.EDITOR
             }
             showNewProjectDialog.value = false
+        }
+    }
+
+    fun importProjectFromZip(
+        uri: Uri,
+        context: Context,
+        onResult: (Boolean, String, BotProject?) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val contentResolver = context.contentResolver
+                var fileName = "Imported Bot"
+                try {
+                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex != -1 && cursor.moveToFirst()) {
+                            val resolved = cursor.getString(nameIndex)
+                            if (!resolved.isNullOrBlank()) {
+                                fileName = resolved
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                val inputStream = contentResolver.openInputStream(uri)
+                    ?: throw IllegalArgumentException("Could not open ZIP stream from selected file")
+
+                val parsed = com.example.util.BotZipManager.parseZipStream(inputStream, fileName)
+
+                val newProject = BotProject(
+                    name = parsed.name,
+                    description = parsed.description,
+                    language = parsed.language,
+                    prefix = parsed.prefix,
+                    botToken = parsed.botToken.ifBlank { "MTE4OTIzNDU2Nzg5MDEyMzQ1Ng.G-DiscordSecretBotTokenHere" },
+                    clientId = parsed.clientId,
+                    status = parsed.status,
+                    activityType = parsed.activityType,
+                    activityText = parsed.activityText
+                )
+
+                val newId = repository.importProjectWithFiles(newProject, parsed.files)
+                val created = repository.getProjectSync(newId)
+
+                withContext(Dispatchers.Main) {
+                    if (created != null) {
+                        selectProject(created)
+                        _currentTab.value = AppTab.EDITOR
+                    }
+                    onResult(true, "Successfully imported '${parsed.name}' with ${parsed.files.size} files!", created)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Import failed: ${e.localizedMessage ?: "Unknown error"}", null)
+                }
+            }
+        }
+    }
+
+    fun exportProjectToZip(
+        project: BotProject,
+        destinationUri: Uri,
+        context: Context,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = repository.getFilesDirect(project.id)
+                val outputStream = context.contentResolver.openOutputStream(destinationUri)
+                    ?: throw IllegalArgumentException("Could not open destination file for writing")
+
+                val summary = com.example.util.BotZipManager.exportToZipStream(outputStream, project, files)
+                withContext(Dispatchers.Main) {
+                    onResult(summary.success, summary.message)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Export failed: ${e.localizedMessage ?: "Unknown error"}")
+                }
+            }
+        }
+    }
+
+    fun shareProjectZip(
+        project: BotProject,
+        context: Context,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = repository.getFilesDirect(project.id)
+                val zipFile = com.example.util.BotZipManager.createZipFileForSharing(context, project, files)
+                if (zipFile != null && zipFile.exists()) {
+                    val shareUri = com.example.util.BotZipManager.getShareUriForFile(context, zipFile)
+                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(android.content.Intent.EXTRA_STREAM, shareUri)
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, "${project.name} Discord Bot Archive")
+                        putExtra(android.content.Intent.EXTRA_TEXT, "Exported Discord bot '${project.name}' ready to run.")
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    withContext(Dispatchers.Main) {
+                        val chooser = android.content.Intent.createChooser(shareIntent, "Export & Share ${project.name} ZIP")
+                        chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(chooser)
+                        onResult(true, "ZIP archive created and ready to share!")
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        onResult(false, "Could not generate shareable ZIP file.")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Share failed: ${e.localizedMessage ?: "Unknown error"}")
+                }
+            }
         }
     }
 
@@ -535,6 +666,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     val gatewayStatus: StateFlow<com.example.engine.GatewayStatus> = runtimeEngine.gatewayStatus
+    val runningProjectId: StateFlow<Long?> = runtimeEngine.runningProjectId
     val voiceConnectionState = runtimeEngine.voiceEngine.connectionState
     val isDaveActive = runtimeEngine.voiceEngine.isDaveActive
 

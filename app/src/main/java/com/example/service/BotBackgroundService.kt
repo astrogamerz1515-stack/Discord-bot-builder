@@ -114,6 +114,15 @@ class BotBackgroundService : Service() {
             }
             ACTION_START, null -> {
                 val prefs = getPrefs(this)
+                val wasMarkedRunning = prefs.getBoolean(PREF_IS_RUNNING, false)
+
+                // If restarted by OS without explicit intent, ensure it was actually supposed to be running
+                if (intent == null && !wasMarkedRunning) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
                 activeProjectId = intent?.getLongExtra(EXTRA_PROJECT_ID, 0L) ?: prefs.getLong(PREF_PROJECT_ID, 0L)
                 activeBotName = intent?.getStringExtra(EXTRA_BOT_NAME) ?: prefs.getString(PREF_BOT_NAME, "Discord Bot") ?: "Discord Bot"
 
@@ -123,6 +132,8 @@ class BotBackgroundService : Service() {
                     .putLong(PREF_PROJECT_ID, activeProjectId)
                     .putString(PREF_BOT_NAME, activeBotName)
                     .apply()
+
+                acquireSystemLocks()
 
                 val notification = buildNotification(activeBotName, "Starting Gateway connection...", false)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -148,8 +159,13 @@ class BotBackgroundService : Service() {
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // Refresh locks to guarantee system will not sleep
+        // Refresh locks to guarantee CPU and Wi-Fi will not sleep
         acquireSystemLocks()
+
+        // Double check engine is running in persistent background
+        if (activeProjectId > 0) {
+            ensureBotEngineRunning(activeProjectId)
+        }
 
         // Update notification indicating app is closed but bot is still active 24/7
         val notification = buildNotification(

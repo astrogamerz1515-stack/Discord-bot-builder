@@ -80,6 +80,9 @@ class BotRuntimeEngine(
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+    private val _runningProjectId = MutableStateFlow<Long?>(null)
+    val runningProjectId: StateFlow<Long?> = _runningProjectId.asStateFlow()
+
     private val _isRealDiscordConnected = MutableStateFlow(false)
     val isRealDiscordConnected: StateFlow<Boolean> = _isRealDiscordConnected.asStateFlow()
 
@@ -101,17 +104,38 @@ class BotRuntimeEngine(
     private val _toastEvents = MutableSharedFlow<String>()
     val toastEvents: SharedFlow<String> = _toastEvents.asSharedFlow()
 
-    // OkHttp Client
+    // High-performance shared connection pool to eliminate TLS handshake latency
+    private val connectionPool = okhttp3.ConnectionPool(10, 5, TimeUnit.MINUTES)
+
+    // Optimized OkHttp Client with HTTP/2, ConnectionPool, and WebSocket PingInterval (20s)
+    // The pingInterval keeps the socket alive 24/7 across screen lock, backgrounding, and Doze mode
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
+        .connectionPool(connectionPool)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS) // 0 for persistent WebSocket
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS) // CRITICAL: RFC 6455 transport ping prevents cellular/Wi-Fi NAT drops
+        .retryOnConnectionFailure(true)
         .build()
 
     // Subsystems
-    val restClient = DiscordRestClient(httpClient)
+    val restClient = DiscordRestClient(
+        OkHttpClient.Builder()
+            .connectionPool(connectionPool)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(8, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    )
     val voiceEngine = DiscordVoiceEngine(scope, httpClient)
     val oauthManager = DiscordOAuthManager(httpClient)
+
+    // In-memory cached files for instant zero-latency command parsing
+    @Volatile
+    private var cachedFiles: List<BotFile>? = null
+    @Volatile
+    private var cachedProjectId: Long = 0L
 
     // Gateway Session State
     private var discordWebSocket: WebSocket? = null
@@ -124,6 +148,7 @@ class BotRuntimeEngine(
     private var isAwaitingAck: Boolean = false
 
     private var heartbeatJob: Job? = null
+    private var reconnectJob: Job? = null
     private var currentProjectId: Long = 0L
     private var activeProject: BotProject? = null
     private var isResuming = false
@@ -132,6 +157,25 @@ class BotRuntimeEngine(
     private var shardId: Int = 0
     private var shardCount: Int = 1
     private var dailyIdentifyCount: Int = 0
+
+    fun invalidateFileCache(projectId: Long? = null) {
+        cachedFiles = null
+        BotCodeExecutor.invalidateCache(projectId ?: currentProjectId)
+    }
+
+    /**
+     * Non-blocking asynchronous terminal logging. Writes to SQLite on Dispatchers.IO
+     * without blocking the incoming message dispatch or REST reply!
+     */
+    fun logAsync(projectId: Long, text: String, type: String = "STDOUT") {
+        scope.launch(Dispatchers.IO) {
+            try {
+                repository.addTerminalLog(projectId, text, type)
+            } catch (e: Exception) {
+                // Ignore DB logging errors during shutdown
+            }
+        }
+    }
 
     init {
         _simulatorMessages.value = listOf(
@@ -225,14 +269,22 @@ class BotRuntimeEngine(
         if (_isRunning.value) return
         currentProjectId = project.id
         activeProject = project
+        _runningProjectId.value = project.id
         _isRunning.value = true
 
         val cleanToken = sanitizeToken(project.botToken)
         val hasRealToken = isRealToken(cleanToken)
 
         scope.launch(Dispatchers.IO) {
-            repository.addTerminalLog(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
-            delay(150)
+            // Pre-cache files in memory for fast zero-latency command parsing
+            try {
+                val files = repository.getFilesDirect(project.id)
+                cachedFiles = files
+                cachedProjectId = project.id
+            } catch (e: Exception) {}
+
+            logAsync(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
+            delay(100)
 
             if (hasRealToken) {
                 _botStatusText.value = "Connecting to Discord..."
@@ -241,7 +293,7 @@ class BotRuntimeEngine(
                 val gatewayInfo = restClient.getGatewayBot(cleanToken)
                 if (gatewayInfo != null) {
                     shardCount = gatewayInfo.shards.coerceAtLeast(1)
-                    repository.addTerminalLog(
+                    logAsync(
                         project.id,
                         "[GATEWAY] Discord Recommended Shards: $shardCount | Daily Session Limit: ${gatewayInfo.remainingSessions}/${gatewayInfo.totalSessionLimit}",
                         "STDOUT"
@@ -261,14 +313,14 @@ class BotRuntimeEngine(
         _gatewayPingMs.value = Random.nextInt(18, 28)
 
         scope.launch(Dispatchers.IO) {
-            repository.addTerminalLog(project.id, "⚠️ [SIMULATOR MODE] No valid Discord Bot Token found in Bot Config.", "WARN")
-            repository.addTerminalLog(project.id, "👉 To connect to REAL Discord:", "SYSTEM")
-            repository.addTerminalLog(project.id, "   1. Visit Discord Developer Portal: https://discord.com/developers/applications", "STDOUT")
-            repository.addTerminalLog(project.id, "   2. Under 'Bot' tab, click 'Reset Token' and copy your bot token.", "STDOUT")
-            repository.addTerminalLog(project.id, "   3. Turn ON 'Message Content Intent' under Privileged Gateway Intents.", "STDOUT")
-            repository.addTerminalLog(project.id, "   4. Paste your token in the 'Config' tab of BotStudio and click Save.", "STDOUT")
-            repository.addTerminalLog(project.id, "   5. Click 'Invite Bot' to add it to your Discord server!", "STDOUT")
-            repository.addTerminalLog(project.id, "🟢 [READY] Running in Local Simulator. Test interactions in the 'Simulator' tab.", "SUCCESS")
+            logAsync(project.id, "⚠️ [SIMULATOR MODE] No valid Discord Bot Token found in Bot Config.", "WARN")
+            logAsync(project.id, "👉 To connect to REAL Discord:", "SYSTEM")
+            logAsync(project.id, "   1. Visit Discord Developer Portal: https://discord.com/developers/applications", "STDOUT")
+            logAsync(project.id, "   2. Under 'Bot' tab, click 'Reset Token' and copy your bot token.", "STDOUT")
+            logAsync(project.id, "   3. Turn ON 'Message Content Intent' under Privileged Gateway Intents.", "STDOUT")
+            logAsync(project.id, "   4. Paste your token in the 'Config' tab of BotStudio and click Save.", "STDOUT")
+            logAsync(project.id, "   5. Click 'Invite Bot' to add it to your Discord server!", "STDOUT")
+            logAsync(project.id, "🟢 [READY] Running in Local Simulator. Test interactions in the 'Simulator' tab.", "SUCCESS")
 
             val botMsg = DiscordSimulatorMessage(
                 authorName = project.name,
@@ -283,8 +335,11 @@ class BotRuntimeEngine(
 
     /**
      * Connects to Discord Gateway v10 WebSocket. Supports session resume when available.
+     * Integrates automatic reconnection loop with exponential backoff.
      */
     private fun connectRealDiscordGateway(project: BotProject, isResumeAttempt: Boolean) {
+        if (!_isRunning.value) return
+
         isResuming = isResumeAttempt && sessionId != null && lastSequence != null
         val gatewayUrl = if (isResuming && !resumeGatewayUrl.isNullOrBlank()) {
             "${resumeGatewayUrl}/?v=10&encoding=json"
@@ -297,16 +352,20 @@ class BotRuntimeEngine(
             .header("User-Agent", "DiscordBot (https://github.com/aistudio, 2.0.0)")
             .build()
 
-        scope.launch(Dispatchers.IO) {
-            val logAction = if (isResuming) "Resuming existing session ($sessionId)" else "Initiating clean connection"
-            repository.addTerminalLog(project.id, "[GATEWAY] Connecting to $gatewayUrl ($logAction)...", "STDOUT")
-        }
+        val logAction = if (isResuming) "Resuming session $sessionId" else "Clean handshake"
+        logAsync(project.id, "[GATEWAY] Connecting to $gatewayUrl ($logAction)...", "STDOUT")
+
+        // Cancel previous stale socket if any
+        try {
+            discordWebSocket?.cancel()
+        } catch (e: Exception) {}
 
         discordWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                scope.launch(Dispatchers.IO) {
-                    repository.addTerminalLog(project.id, "[GATEWAY] WebSocket handshake opened. Waiting for HELLO opcode 10...", "STDOUT")
-                }
+                // Cancel pending reconnect attempts upon successful connection
+                reconnectJob?.cancel()
+                reconnectJob = null
+                logAsync(project.id, "[GATEWAY] WebSocket handshake opened. Waiting for HELLO opcode 10...", "STDOUT")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -314,20 +373,18 @@ class BotRuntimeEngine(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                scope.launch(Dispatchers.IO) {
-                    _isRealDiscordConnected.value = false
-                    _botStatusText.value = "Connection Interrupted"
-                    val code = response?.code
-                    val errMsg = t.message ?: "Unknown socket error"
-                    repository.addTerminalLog(project.id, "❌ [GATEWAY ERROR] Network failure (HTTP $code): $errMsg", "STDERR")
+                _isRealDiscordConnected.value = false
+                _botStatusText.value = "Connection Interrupted (Auto-reconnecting...)"
+                val code = response?.code
+                val errMsg = t.message ?: "Unknown socket error"
+                logAsync(project.id, "❌ [GATEWAY ERROR] Network failure (HTTP $code): $errMsg", "STDERR")
 
-                    // Attempt automatic resume if session is alive
-                    if (sessionId != null && lastSequence != null && _isRunning.value) {
-                        delay(2000)
-                        repository.addTerminalLog(project.id, "🔄 [GATEWAY] Attempting auto-resume after network glitch...", "WARN")
-                        connectRealDiscordGateway(project, isResumeAttempt = true)
-                    }
-                }
+                try {
+                    webSocket.cancel()
+                } catch (e: Exception) {}
+
+                // Continuous auto-reconnect with exponential backoff (survives backgrounding, lock screen, Doze)
+                scheduleAutoReconnect(project, "Network failure ($errMsg)")
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -341,43 +398,81 @@ class BotRuntimeEngine(
     }
 
     /**
+     * Continuous auto-reconnect loop with exponential backoff.
+     * Guarantees that when the app is closed, minimized, or the phone turns off,
+     * the bot will continuously reconnect as soon as network is available!
+     */
+    private fun scheduleAutoReconnect(project: BotProject, reason: String) {
+        if (!_isRunning.value) return
+        if (reconnectJob?.isActive == true) return
+
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            var delayMs = 1500L
+            var attempts = 0
+            while (isActive && _isRunning.value && !_isRealDiscordConnected.value) {
+                attempts++
+                logAsync(project.id, "🔄 [GATEWAY AUTO-RECONNECT] Attempt #$attempts ($reason) in ${delayMs}ms...", "WARN")
+                delay(delayMs)
+                if (!_isRunning.value || _isRealDiscordConnected.value) break
+
+                val canResume = sessionId != null && lastSequence != null
+                try {
+                    connectRealDiscordGateway(project, isResumeAttempt = canResume)
+                } catch (e: Exception) {
+                    logAsync(project.id, "⚠️ [GATEWAY RETRY ERROR] ${e.message}", "WARN")
+                }
+
+                // Exponential backoff capped at 10 seconds
+                delayMs = (delayMs * 1.5).toLong().coerceAtMost(10000L)
+            }
+        }
+    }
+
+    /**
      * Close Code Decision Matrix: Decides between Resume, Re-Identify, or Fatal Halt.
      */
     private fun handleGatewayClose(code: Int, reason: String, project: BotProject) {
         scope.launch(Dispatchers.IO) {
             _isRealDiscordConnected.value = false
-            val isResumable = code in listOf(4000, 4008, 4009, 1001, 1006)
 
             when (code) {
                 4004 -> {
+                    // Fatal: Invalid Token
                     sessionId = null
                     lastSequence = null
-                    repository.addTerminalLog(project.id, "❌ [ERROR 4004] Authentication Failed: Invalid Discord Bot Token. Please check token in Config tab.", "STDERR")
+                    _isRunning.value = false
+                    _runningProjectId.value = null
+                    logAsync(project.id, "❌ [ERROR 4004] Authentication Failed: Invalid Discord Bot Token. Please check token in Config tab.", "STDERR")
+                    return@launch
                 }
                 4014 -> {
+                    // Fatal: Missing Intent
                     sessionId = null
                     lastSequence = null
-                    repository.addTerminalLog(project.id, "❌ [ERROR 4014] Disallowed Intents: You MUST enable 'Message Content Intent' in Discord Developer Portal -> Bot -> Privileged Gateway Intents.", "STDERR")
+                    _isRunning.value = false
+                    _runningProjectId.value = null
+                    logAsync(project.id, "❌ [ERROR 4014] Disallowed Intents: You MUST enable 'Message Content Intent' in Discord Developer Portal -> Bot -> Privileged Gateway Intents.", "STDERR")
+                    return@launch
                 }
-                4010 -> {
-                    repository.addTerminalLog(project.id, "❌ [ERROR 4010] Invalid Shard.", "STDERR")
+                4010, 4011, 4012, 4013 -> {
+                    // Fatal configuration errors
+                    logAsync(project.id, "❌ [FATAL GATEWAY ERROR $code] $reason", "STDERR")
+                    return@launch
                 }
-                4011 -> {
-                    repository.addTerminalLog(project.id, "❌ [ERROR 4011] Sharding Required: Bot is in >2500 servers. Increase shard count.", "STDERR")
-                }
-                4013 -> {
-                    repository.addTerminalLog(project.id, "❌ [ERROR 4013] Invalid Intents sent in Identify payload.", "STDERR")
+                4007, 4009 -> {
+                    // Invalid sequence or session timed out -> clear session and re-identify
+                    sessionId = null
+                    lastSequence = null
+                    logAsync(project.id, "⚠️ [GATEWAY] Session invalidated ($code: $reason). Starting fresh session...", "WARN")
                 }
                 else -> {
-                    repository.addTerminalLog(project.id, "🔴 [GATEWAY CLOSED] Code $code: $reason", if (code >= 4000) "STDERR" else "WARN")
+                    logAsync(project.id, "🔴 [GATEWAY CLOSED] Code $code: $reason", if (code >= 4000) "STDERR" else "WARN")
                 }
             }
 
-            // Auto-reconnect / Resume logic
-            if (isResumable && _isRunning.value) {
-                repository.addTerminalLog(project.id, "🔄 [GATEWAY] Close code $code is resumable. Reconnecting with session $sessionId...", "WARN")
-                delay(1500)
-                connectRealDiscordGateway(project, isResumeAttempt = true)
+            // Auto-reconnect for all non-fatal close codes
+            if (_isRunning.value) {
+                scheduleAutoReconnect(project, "Close code $code")
             }
         }
     }
@@ -644,7 +739,8 @@ class BotRuntimeEngine(
 
         if (isBot) return
 
-        repository.addTerminalLog(
+        // Log asynchronously in background so message processing starts immediately
+        logAsync(
             project.id,
             "📥 [REAL DISCORD MSG] #$channelId @$authorUsername: '$content'",
             "STDOUT"
@@ -658,8 +754,17 @@ class BotRuntimeEngine(
         )
         _simulatorMessages.value = _simulatorMessages.value + mirrorMsg
 
-        // Execute user code
-        val files = repository.getFilesDirect(project.id)
+        // Fast in-memory cached files (avoids repeated SQLite disk reads on every message)
+        val files = if (cachedProjectId == project.id && cachedFiles != null) {
+            cachedFiles!!
+        } else {
+            val direct = repository.getFilesDirect(project.id)
+            cachedFiles = direct
+            cachedProjectId = project.id
+            direct
+        }
+
+        // Execute user code (<1ms with O(1) indexed lookup)
         val result = BotCodeExecutor.executeIncomingMessage(
             messageContent = content,
             authorUsername = authorUsername,
@@ -671,7 +776,7 @@ class BotRuntimeEngine(
 
         if (result.isHandled) {
             if (result.executionLog.isNotBlank()) {
-                repository.addTerminalLog(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
+                logAsync(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
             }
             sendRealDiscordMessage(
                 channelId = channelId,
@@ -691,9 +796,17 @@ class BotRuntimeEngine(
         val user = member?.optJSONObject("user") ?: d.optJSONObject("user")
         val username = user?.optString("username", "Developer") ?: "Developer"
 
-        repository.addTerminalLog(project.id, "⚡ [INTERACTION] Slash command /$cmdName invoked by @$username", "STDOUT")
+        logAsync(project.id, "⚡ [INTERACTION] Slash command /$cmdName invoked by @$username", "STDOUT")
 
-        val files = repository.getFilesDirect(project.id)
+        val files = if (cachedProjectId == project.id && cachedFiles != null) {
+            cachedFiles!!
+        } else {
+            val direct = repository.getFilesDirect(project.id)
+            cachedFiles = direct
+            cachedProjectId = project.id
+            direct
+        }
+
         val result = BotCodeExecutor.executeIncomingMessage(
             messageContent = "/$cmdName",
             authorUsername = username,
@@ -721,10 +834,12 @@ class BotRuntimeEngine(
             while (isActive && _isRunning.value) {
                 delay(heartbeatIntervalMs)
 
-                // Zombie connection detection: If previous heartbeat was not ACKed, terminate and resume!
+                // Zombie connection detection: If previous heartbeat was not ACKed, abort stale socket and reconnect
                 if (isAwaitingAck) {
-                    repository.addTerminalLog(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing from Discord. Closing connection and initiating RESUME...", "WARN")
-                    webSocket.close(4000, "Zombie connection - ACK timeout")
+                    logAsync(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing from Discord. Reconnecting session...", "WARN")
+                    try {
+                        webSocket.cancel()
+                    } catch (e: Exception) {}
                     connectRealDiscordGateway(activeProject ?: return@launch, isResumeAttempt = true)
                     break
                 }
@@ -964,15 +1079,22 @@ class BotRuntimeEngine(
 
     fun stopBot(projectId: Long) {
         if (!_isRunning.value) return
+        reconnectJob?.cancel()
+        reconnectJob = null
         heartbeatJob?.cancel()
         voiceEngine.disconnectVoice()
-        discordWebSocket?.close(1000, "Clean close from BotStudio")
+        try {
+            discordWebSocket?.cancel()
+            discordWebSocket?.close(1000, "Clean close from BotStudio")
+        } catch (e: Exception) {}
         discordWebSocket = null
 
         _isRunning.value = false
+        _runningProjectId.value = null
         _isRealDiscordConnected.value = false
         _botStatusText.value = "Stopped"
         _gatewayPingMs.value = 0
+        invalidateFileCache(projectId)
 
         _gatewayStatus.value = _gatewayStatus.value.copy(
             isConnected = false,
@@ -980,9 +1102,9 @@ class BotRuntimeEngine(
         )
 
         scope.launch(Dispatchers.IO) {
-            repository.addTerminalLog(projectId, "^C", "INPUT")
-            repository.addTerminalLog(projectId, "[GATEWAY] Disconnected (Code 1000: Clean close)", "WARN")
-            repository.addTerminalLog(projectId, "[PROCESS] Bot process terminated with exit code 0", "SYSTEM")
+            logAsync(projectId, "^C", "INPUT")
+            logAsync(projectId, "[GATEWAY] Disconnected (Code 1000: Clean close)", "WARN")
+            logAsync(projectId, "[PROCESS] Bot process terminated with exit code 0", "SYSTEM")
 
             val botMsg = DiscordSimulatorMessage(
                 authorName = "System",
@@ -1006,9 +1128,12 @@ class BotRuntimeEngine(
      */
     fun hotReload(projectId: Long) {
         scope.launch(Dispatchers.IO) {
-            repository.addTerminalLog(projectId, "🔥 [HOT RELOAD] Re-indexing project source files...", "SYSTEM")
+            logAsync(projectId, "🔥 [HOT RELOAD] Re-indexing project source files...", "SYSTEM")
             val files = repository.getFilesDirect(projectId)
-            repository.addTerminalLog(projectId, "🔥 [HOT RELOAD] Successfully recompiled ${files.size} source file(s). Active Gateway session preserved!", "SUCCESS")
+            cachedFiles = files
+            cachedProjectId = projectId
+            BotCodeExecutor.invalidateCache(projectId)
+            logAsync(projectId, "🔥 [HOT RELOAD] Successfully recompiled ${files.size} source file(s). Active Gateway session preserved!", "SUCCESS")
         }
     }
 

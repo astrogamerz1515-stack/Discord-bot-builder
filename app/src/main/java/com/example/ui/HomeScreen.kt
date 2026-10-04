@@ -1,6 +1,9 @@
 package com.example.ui
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -25,10 +28,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -36,8 +43,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -78,7 +87,7 @@ import com.example.ui.theme.DiscordYellow
 /**
  * HomeScreen providing the 2 primary options:
  * 1. "New Bot" - Opens bot creation wizard/dialog.
- * 2. "My Bots" - Displays list of all bots created by the user; clicking any bot immediately opens the code editor.
+ * 2. "My Bots" - Displays list of all bots created by the user with Import/Export ZIP support.
  */
 @Composable
 fun HomeScreen(
@@ -95,9 +104,42 @@ fun HomeScreen(
     val allProjects by viewModel.allProjects.collectAsState()
     val currentProject by viewModel.currentProject.collectAsState()
     val isRunning by viewModel.runtimeEngine.isRunning.collectAsState()
+    val runningProjectId by viewModel.runningProjectId.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var projectToDelete by remember { mutableStateOf<BotProject?>(null) }
+    var isImporting by remember { mutableStateOf(false) }
+    var projectToExport by remember { mutableStateOf<BotProject?>(null) }
+    var showExportOptionsDialog by remember { mutableStateOf<BotProject?>(null) }
+
+    // Launcher for selecting and unzipping a bot ZIP file
+    val zipPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            isImporting = true
+            viewModel.importProjectFromZip(uri, context) { success, message, importedProject ->
+                isImporting = false
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                if (success && importedProject != null) {
+                    onOpenEditor(importedProject)
+                }
+            }
+        }
+    }
+
+    // Launcher for creating destination ZIP file for export
+    val zipExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        val project = projectToExport
+        if (uri != null && project != null) {
+            viewModel.exportProjectToZip(project, uri, context) { success, message ->
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }
+        }
+        projectToExport = null
+    }
 
     val filteredProjects = remember(allProjects, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -162,6 +204,12 @@ fun HomeScreen(
                 }
 
                 // Background runtime active status
+                val runningBot = remember(allProjects, runningProjectId, isRunning) {
+                    if (isRunning && runningProjectId != null) {
+                        allProjects.find { it.id == runningProjectId }
+                    } else null
+                }
+
                 Surface(
                     color = if (isRunning) DiscordGreen.copy(alpha = 0.15f) else DiscordSurface,
                     shape = RoundedCornerShape(12.dp),
@@ -178,7 +226,7 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isRunning) "Runtime: RUNNING" else "Runtime: IDLE",
+                            text = if (runningBot != null) "24/7 ONLINE: ${runningBot.name}" else if (isRunning) "Runtime: RUNNING" else "Runtime: IDLE",
                             color = if (isRunning) DiscordGreen else DiscordTextSecondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
@@ -324,12 +372,46 @@ fun HomeScreen(
                             }
                         }
 
-                        Text(
-                            text = "Tap a bot to open editor",
-                            color = DiscordTextMuted,
-                            fontSize = 11.sp
-                        )
+                        // Prominent Import ZIP action button
+                        Button(
+                            onClick = {
+                                zipPickerLauncher.launch(
+                                    arrayOf(
+                                        "application/zip",
+                                        "application/x-zip-compressed",
+                                        "application/octet-stream",
+                                        "*/*"
+                                    )
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("btn_import_bot_zip")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudDownload,
+                                contentDescription = "Import Bot",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Import ZIP",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
+
+                    Text(
+                        text = "Tap a bot to open editor • Export as ZIP anytime",
+                        color = DiscordTextMuted,
+                        fontSize = 11.sp
+                    )
 
                     // Search input if there are bots
                     if (allProjects.size > 2) {
@@ -419,15 +501,45 @@ fun HomeScreen(
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
 
-                            Button(
-                                onClick = { onCreateBotClick() },
-                                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.testTag("btn_empty_create_bot")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Create Your First Bot", fontWeight = FontWeight.Bold)
+                                Button(
+                                    onClick = { onCreateBotClick() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.testTag("btn_empty_create_bot")
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("New Bot", fontWeight = FontWeight.Bold)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        zipPickerLauncher.launch(
+                                            arrayOf(
+                                                "application/zip",
+                                                "application/x-zip-compressed",
+                                                "application/octet-stream",
+                                                "*/*"
+                                            )
+                                        )
+                                    },
+                                    border = BorderStroke(1.dp, DiscordBlurple),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.testTag("btn_empty_import_zip")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = null,
+                                        tint = DiscordBlurple,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Import from ZIP", color = DiscordTextPrimary, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -435,27 +547,33 @@ fun HomeScreen(
             } else {
                 items(items = filteredProjects, key = { it.id }) { project ->
                     val isSelected = currentProject?.id == project.id
-                    val isProjectRunning = isRunning && isSelected
+                    val isThisProjectRunning = isRunning && (runningProjectId == project.id)
 
                     HomeBotCard(
                         project = project,
                         isSelected = isSelected,
-                        isRunning = isProjectRunning,
+                        isRunning = isThisProjectRunning,
                         onClick = { onOpenEditor(project) },
                         onOpenEditorClick = { onOpenEditor(project) },
                         onRunToggleClick = {
-                            viewModel.selectProject(project)
-                            if (isRunning && isSelected) {
+                            if (isRunning && runningProjectId == project.id) {
                                 viewModel.stopBotProcess()
-                                Toast.makeText(context, "Bot stopped", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Bot '${project.name}' stopped", Toast.LENGTH_SHORT).show()
                             } else {
+                                if (isRunning) {
+                                    viewModel.stopBotProcess()
+                                }
+                                viewModel.selectProject(project)
                                 viewModel.startBotProcess()
-                                Toast.makeText(context, "Bot started in background", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Bot '${project.name}' running in background 24/7", Toast.LENGTH_SHORT).show()
                             }
                         },
                         onConfigureClick = {
                             viewModel.selectProject(project)
                             viewModel.setTab(AppTab.BOT_CONFIG)
+                        },
+                        onExportClick = {
+                            showExportOptionsDialog = project
                         },
                         onDeleteClick = {
                             projectToDelete = project
@@ -464,6 +582,133 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // Progress Dialog when importing and extracting ZIP files
+    if (isImporting) {
+        AlertDialog(
+            onDismissRequest = { /* prevent dismissal while unpacking */ },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        color = DiscordBlurple,
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.5.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Importing Discord Bot...",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Text(
+                    text = "Unzipping project files, analyzing code structure, configuring dependencies, and preparing runtime...",
+                    color = DiscordTextSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {},
+            shape = RoundedCornerShape(12.dp)
+        )
+    }
+
+    // Dialog for Exporting Bot Project to ZIP
+    showExportOptionsDialog?.let { targetProject ->
+        AlertDialog(
+            onDismissRequest = { showExportOptionsDialog = null },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.FolderZip,
+                        contentDescription = null,
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Export ${targetProject.name}",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Package all project code, configurations, and assets for \"${targetProject.name}\" into a standard ZIP archive.",
+                        color = DiscordTextSecondary,
+                        fontSize = 13.sp
+                    )
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "📦 Archive includes:",
+                                color = DiscordTextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp
+                            )
+                            Text(
+                                text = "• All source code files and directories\n• Environment variables and configs\n• Standard bot_project.json metadata",
+                                color = DiscordTextMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Option 1: Share directly via app
+                    OutlinedButton(
+                        onClick = {
+                            val proj = targetProject
+                            showExportOptionsDialog = null
+                            viewModel.shareProjectZip(proj, context) { _, _ -> }
+                        },
+                        border = BorderStroke(1.dp, DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share ZIP", color = DiscordTextPrimary, fontSize = 12.sp)
+                    }
+
+                    // Option 2: Save to device storage
+                    Button(
+                        onClick = {
+                            val proj = targetProject
+                            showExportOptionsDialog = null
+                            projectToExport = proj
+                            val safeName = proj.name.replace(Regex("[^a-zA-Z0-9._-]"), "_").trim('_').ifEmpty { "bot" }
+                            zipExportLauncher.launch("${safeName}.zip")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Save as ZIP", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportOptionsDialog = null }) {
+                    Text("Cancel", color = DiscordTextSecondary)
+                }
+            },
+            shape = RoundedCornerShape(12.dp)
+        )
     }
 
     // Confirmation Dialog to Delete Bot Project
@@ -533,6 +778,7 @@ fun HomeBotCard(
     onOpenEditorClick: () -> Unit,
     onRunToggleClick: () -> Unit,
     onConfigureClick: () -> Unit,
+    onExportClick: () -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -739,6 +985,22 @@ fun HomeBotCard(
                             imageVector = Icons.Default.Build,
                             contentDescription = "Config",
                             tint = DiscordTextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    // Export Bot to ZIP Button
+                    IconButton(
+                        onClick = onExportClick,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(DiscordElevated, RoundedCornerShape(6.dp))
+                            .testTag("btn_export_bot_${project.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = "Export ZIP",
+                            tint = DiscordBlurple,
                             modifier = Modifier.size(16.dp)
                         )
                     }

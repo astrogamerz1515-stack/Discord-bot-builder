@@ -101,6 +101,35 @@ class BotRepository(
         return projectId
     }
 
+    suspend fun importProjectWithFiles(
+        project: BotProject,
+        files: List<BotFile>
+    ): Long {
+        val projectId = projectDao.insertProject(project)
+        val filesWithProjectId = files.map { it.copy(projectId = projectId) }
+        fileDao.insertFiles(filesWithProjectId)
+
+        logDao.insertLog(
+            TerminalLog(
+                projectId = projectId,
+                text = "📦 Successfully imported '${project.name}' (${files.size} files) from ZIP archive",
+                type = "SYSTEM"
+            )
+        )
+        val entry = filesWithProjectId.find { it.isEntrypoint } ?: filesWithProjectId.firstOrNull()
+        if (entry != null) {
+            logDao.insertLog(
+                TerminalLog(
+                    projectId = projectId,
+                    text = "🚀 Active Entrypoint: ${entry.filePath}",
+                    type = "SYSTEM"
+                )
+            )
+        }
+
+        return projectId
+    }
+
     suspend fun updateProject(project: BotProject) {
         projectDao.updateProject(project.copy(updatedAt = System.currentTimeMillis()))
     }
