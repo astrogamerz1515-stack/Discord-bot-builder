@@ -93,8 +93,10 @@ object BotCodeExecutor {
         val pythonCmds = mutableMapOf<String, String>()
 
         if (allCode.isNotBlank()) {
+            val codeToScan = if (allCode.length > 250_000) allCode.take(250_000) else allCode
+
             // Pattern A: Exact match
-            for (match in EXACT_MATCH_REGEX.findAll(allCode)) {
+            for (match in EXACT_MATCH_REGEX.findAll(codeToScan)) {
                 val trigger = match.groupValues[1].trim().lowercase()
                 val body = match.groupValues[2].trim()
                 exact[trigger] = body

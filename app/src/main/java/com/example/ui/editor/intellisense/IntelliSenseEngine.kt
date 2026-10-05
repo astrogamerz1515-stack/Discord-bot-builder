@@ -11,7 +11,8 @@ object IntelliSenseEngine {
         filePath: String
     ): List<CompletionItem> {
         val safeCursor = cursorIndex.coerceIn(0, code.length)
-        val textBeforeCursor = code.substring(0, safeCursor)
+        // Only inspect the tail before the cursor for fast, predictable matching
+        val textBeforeCursor = code.substring(maxOf(0, safeCursor - 200), safeCursor)
         val isPython = filePath.endsWith(".py", ignoreCase = true)
 
         // Find the current token being typed
@@ -79,7 +80,8 @@ object IntelliSenseEngine {
         cursorIndex: Int
     ): SignatureHelp? {
         val safeCursor = cursorIndex.coerceIn(0, code.length)
-        val textBeforeCursor = code.substring(0, safeCursor)
+        val sampleStart = maxOf(0, safeCursor - 500)
+        val textBeforeCursor = code.substring(sampleStart, safeCursor)
 
         // Find the last unmatched '('
         val lastOpenParen = textBeforeCursor.lastIndexOf('(')
@@ -102,7 +104,8 @@ object IntelliSenseEngine {
         // Count commas inside the current argument list to determine active parameter index
         val argsText = textBeforeCursor.substring(lastOpenParen + 1)
         val commaCount = argsText.count { it == ',' }
-        val activeIndex = commaCount.coerceAtMost(signature.parameters.size - 1)
+        val maxIdx = maxOf(0, signature.parameters.size - 1)
+        val activeIndex = commaCount.coerceIn(0, maxIdx)
 
         return signature.copy(activeParameterIndex = activeIndex)
     }
@@ -120,30 +123,29 @@ object IntelliSenseEngine {
         val textAfter = currentCode.substring(safeCursor)
 
         // Find how much of the current token should be replaced
-        val lastWordMatch = Regex("([A-Za-z0-9_$.]+)$").find(textBefore)
+        val sampleBefore = textBefore.takeLast(100)
+        val lastWordMatch = Regex("([A-Za-z0-9_$.]+)$").find(sampleBefore)
         val currentToken = lastWordMatch?.value ?: ""
 
-        // If the token matches the item's prefix or suffix, replace it
         val insertTextClean = item.insertText.replace("\$1", "").replace("\$2", "").replace("\$3", "")
         val replaceStartIndex: Int
         val newText: String
 
         if (currentToken.isNotEmpty()) {
             if (currentToken.contains('.')) {
-                // If dot exists and item has dot:
                 val prefix = currentToken.substringBeforeLast('.') + "."
                 val member = currentToken.substringAfterLast('.')
-                if (item.label.startsWith(prefix)) {
-                    val itemMember = item.insertText.substringAfter(prefix)
+                if (item.label.startsWith(prefix, ignoreCase = true)) {
+                    val itemMember = item.insertText.substringAfter(prefix, item.insertText)
                     val cleanMember = itemMember.replace("\$1", "").replace("\$2", "").replace("\$3", "")
-                    val start = safeCursor - member.length
+                    val start = (safeCursor - member.length).coerceIn(0, currentCode.length)
                     newText = currentCode.substring(0, start) + cleanMember + textAfter
                     val newCursor = start + cleanMember.length
                     return Pair(newText, newCursor)
                 }
             }
 
-            replaceStartIndex = safeCursor - currentToken.length
+            replaceStartIndex = (safeCursor - currentToken.length).coerceIn(0, currentCode.length)
         } else {
             replaceStartIndex = safeCursor
         }

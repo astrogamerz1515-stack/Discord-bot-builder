@@ -156,6 +156,10 @@ object SyntaxHighlighter {
 
     fun highlight(code: String, filePath: String): AnnotatedString {
         if (code.isEmpty()) return AnnotatedString("")
+        // For mega-sized files (>250,000 characters), skip heavy regex formatting to guarantee instant 60fps editing
+        if (code.length > 250_000) {
+            return AnnotatedString(code)
+        }
         val extension = filePath.substringAfterLast('.', "").lowercase()
 
         return buildAnnotatedString {

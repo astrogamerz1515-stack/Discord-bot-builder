@@ -157,6 +157,15 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     val showGeneratedCodeDialog = MutableStateFlow(false)
     val generatedCodeText = MutableStateFlow("")
 
+    // Import & Auto-Correction Summary Dialog State
+    private val _lastImportFixes = MutableStateFlow<List<String>>(emptyList())
+    val lastImportFixes: StateFlow<List<String>> = _lastImportFixes.asStateFlow()
+
+    private val _lastImportedProject = MutableStateFlow<BotProject?>(null)
+    val lastImportedProject: StateFlow<BotProject?> = _lastImportedProject.asStateFlow()
+
+    val showImportSummaryDialog = MutableStateFlow(false)
+
     private var projectFilesJob: Job? = null
     private var terminalLogsJob: Job? = null
     private var storageJob: Job? = null
@@ -414,8 +423,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     if (created != null) {
                         selectProject(created)
                         _currentTab.value = AppTab.EDITOR
+                        _lastImportedProject.value = created
+                        _lastImportFixes.value = parsed.autoFixes
+                        showImportSummaryDialog.value = parsed.autoFixes.isNotEmpty()
                     }
-                    onResult(true, "Successfully imported '${parsed.name}' (${parsed.files.size} file${if (parsed.files.size == 1) "" else "s"})!", created)
+                    val fixSuffix = if (parsed.autoFixes.isNotEmpty()) " (${parsed.autoFixes.size} auto-corrections applied)" else ""
+                    onResult(true, "Successfully imported '${parsed.name}' (${parsed.files.size} file${if (parsed.files.size == 1) "" else "s"})$fixSuffix!", created)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -460,18 +473,91 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     .replace("\r", "\n")
 
                 val cleanPath = fileName.trimStart('/')
-                val newFileId = repository.createFile(proj.id, cleanPath, cleanContent)
+                val autoFixed = com.example.util.BotCodeAutoFixer.autoFixFile(cleanContent, cleanPath, proj)
+                val finalContent = autoFixed.fixedCode
+
+                val newFileId = repository.createFile(proj.id, cleanPath, finalContent)
                 val createdFile = repository.getFileById(newFileId)
 
                 withContext(Dispatchers.Main) {
                     if (createdFile != null) {
                         selectFile(createdFile)
                     }
-                    onResult?.invoke(true, "Imported '$cleanPath' successfully!")
+                    val fixSuffix = if (autoFixed.fixesApplied.isNotEmpty()) " (${autoFixed.fixesApplied.size} auto-corrections applied)" else ""
+                    onResult?.invoke(true, "Imported '$cleanPath'$fixSuffix successfully!")
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     onResult?.invoke(false, "Failed to import file: ${e.localizedMessage ?: "Unknown error"}")
+                }
+            }
+        }
+    }
+
+    fun autoFixActiveFile(onResult: (Int, List<String>) -> Unit) {
+        val file = _activeFile.value ?: return
+        val proj = _currentProject.value
+        val currentText = _activeFileContent.value
+        val fixResult = com.example.util.BotCodeAutoFixer.autoFixFile(currentText, file.filePath, proj)
+        if (fixResult.wasModified) {
+            updateActiveFileContent(fixResult.fixedCode)
+            saveActiveFile()
+        }
+        onResult(fixResult.fixesApplied.size, fixResult.fixesApplied)
+    }
+
+    fun autoFixEntireProject(onResult: (Int, List<String>) -> Unit) {
+        val proj = _currentProject.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val files = repository.getFilesDirect(proj.id)
+            val report = com.example.util.BotCodeAutoFixer.autoFixProject(proj, files)
+            for (f in report.updatedFiles) {
+                if (f.id == 0L) {
+                    repository.createFile(proj.id, f.filePath, f.content)
+                } else {
+                    repository.saveFile(f)
+                }
+            }
+            withContext(Dispatchers.Main) {
+                _activeFile.value?.let { currentActive ->
+                    val updated = repository.getFilesDirect(proj.id).find { it.filePath == currentActive.filePath }
+                    if (updated != null) {
+                        selectFile(updated)
+                    }
+                }
+                onResult(report.fixesApplied.size, report.fixesApplied)
+            }
+        }
+    }
+
+    fun copyProjectCodeToClipboard(context: Context, onResult: (Boolean, String) -> Unit) {
+        val project = _currentProject.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = repository.getFilesDirect(project.id)
+                val sb = StringBuilder()
+                sb.append("// ==================================================\n")
+                sb.append("// 🤖 ${project.name} (${project.language})\n")
+                sb.append("// Exported from BotStudio - Complete Project Code\n")
+                sb.append("// ==================================================\n\n")
+
+                for (file in files) {
+                    sb.append("// --------------------------------------------------\n")
+                    sb.append("// File: ${file.filePath} ${if (file.isEntrypoint) "(Main Entrypoint)" else ""}\n")
+                    sb.append("// --------------------------------------------------\n")
+                    sb.append(file.content.trimEnd())
+                    sb.append("\n\n")
+                }
+
+                withContext(Dispatchers.Main) {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("${project.name} Code", sb.toString())
+                    clipboard.setPrimaryClip(clip)
+                    onResult(true, "All ${files.size} project files copied to clipboard!")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Failed to copy: ${e.message}")
                 }
             }
         }

@@ -22,28 +22,41 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -54,6 +67,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -124,6 +138,30 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var showIntelliSenseBar by remember { mutableStateOf(true) }
     var showSignatureHelp by remember { mutableStateOf(true) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+
+    // Launcher for exporting project to ZIP from editor
+    val zipExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val proj = project
+        if (uri != null && proj != null) {
+            viewModel.exportProjectToZip(proj, uri, context) { _, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // Pinch-to-zoom editor scaling
+    var fontScale by remember { mutableFloatStateOf(1.0f) }
+    var showZoomToast by remember { mutableStateOf(false) }
+    var zoomToastJob by remember { mutableStateOf<Job?>(null) }
+    val editorScope = rememberCoroutineScope()
+
+    val currentFontSize = (13f * fontScale).sp
+    val currentLineHeight = (20f * fontScale).sp
 
     // Synchronize TextFieldValue with file content and track cursor
     var textFieldValue by remember {
@@ -132,7 +170,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
     // Reset textFieldValue whenever active file changes to the new file's content
     LaunchedEffect(activeFile?.id) {
-        val currentContent = viewModel.activeFileContent.value
+        val currentContent = activeFile?.content ?: viewModel.activeFileContent.value
         textFieldValue = TextFieldValue(currentContent, TextRange(0))
     }
 
@@ -143,8 +181,6 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             textFieldValue = textFieldValue.copy(text = fileContent, selection = TextRange(safeStart, safeEnd))
         }
     }
-
-    val context = LocalContext.current
 
     // Launcher for importing an external code file into the current project
     val fileImportLauncher = rememberLauncherForActivityResult(
@@ -166,12 +202,19 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     val cursorPosition = textFieldValue.selection.end.coerceIn(0, textFieldValue.text.length)
     val isPython = activeFile?.filePath?.endsWith(".py", ignoreCase = true) == true
 
-    // Compute active line and column for status bar and gutter
+    // High-performance allocation-free line & column calculation for huge files
     val currentLineAndCol = remember(textFieldValue.text, cursorPosition) {
-        val textBefore = textFieldValue.text.substring(0, cursorPosition)
-        val linesBefore = textBefore.lines()
-        val line = linesBefore.size
-        val col = linesBefore.lastOrNull()?.length?.plus(1) ?: 1
+        val text = textFieldValue.text
+        val safePos = cursorPosition.coerceIn(0, text.length)
+        var line = 1
+        var lastNewlinePos = -1
+        for (i in 0 until safePos) {
+            if (text[i] == '\n') {
+                line++
+                lastNewlinePos = i
+            }
+        }
+        val col = safePos - lastNewlinePos
         line to col
     }
 
@@ -494,6 +537,45 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
+            // ⚡ Auto-Fix & Mistake Corrector Button
+            Surface(
+                color = DiscordBlurple.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable {
+                        viewModel.autoFixActiveFile { count, fixes ->
+                            if (count > 0) {
+                                val summary = fixes.take(2).joinToString("; ")
+                                Toast.makeText(context, "⚡ Auto-fixed $count issue(s): $summary", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "✓ Code is clean and active! No errors found.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .testTag("btn_autofix_code")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoFixHigh,
+                        contentDescription = "Auto-Fix Code",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Auto-Fix",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
             // Cursor navigation buttons
             Surface(
                 color = DiscordElevated,
@@ -636,6 +718,34 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
+            // Export Bot Project Button
+            Surface(
+                color = DiscordHover,
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .clickable { showExportDialog = true }
+                    .testTag("btn_export_code_file")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudUpload,
+                        contentDescription = "Export Project",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Export",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
             // Error Inspector Badge / Toggle
             Surface(
                 color = if (diagnostics.isNotEmpty()) DiscordRed.copy(alpha = 0.2f) else DiscordHover,
@@ -732,120 +842,177 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
         } else {
-            val lines = remember(textFieldValue.text) { textFieldValue.text.lines() }
-            val lineCount = lines.size.coerceAtLeast(1)
+            // High-performance allocation-free line count calculation
+            val lineCount = remember(textFieldValue.text) {
+                val text = textFieldValue.text
+                var count = 1
+                for (i in 0 until text.length) {
+                    if (text[i] == '\n') count++
+                }
+                count
+            }
             val scrollState = rememberScrollState()
 
-            val lineNumbersString = remember(lineCount) {
-                val sb = StringBuilder(lineCount * 6)
-                for (i in 1..lineCount) {
+            val displayLineCount = minOf(lineCount, 5000)
+            val lineNumbersString = remember(displayLineCount, lineCount) {
+                val sb = StringBuilder(displayLineCount * 6)
+                for (i in 1..displayLineCount) {
                     if (i > 1) sb.append('\n')
                     sb.append(i)
+                }
+                if (lineCount > displayLineCount) {
+                    sb.append("\n...")
                 }
                 sb.toString()
             }
 
-            Row(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(TerminalBg)
-                    .verticalScroll(scrollState)
-            ) {
-                // Line numbers column with active line highlight and error indicators
-                val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
-
-                Box(
-                    modifier = Modifier
-                        .background(DiscordDarker)
-                        .border(
-                            width = 0.5.dp,
-                            color = DiscordHover,
-                            shape = RoundedCornerShape(0.dp)
-                        )
-                        .padding(vertical = 8.dp, horizontal = 6.dp)
-                        .widthIn(min = 40.dp),
-                    contentAlignment = Alignment.TopEnd
-                ) {
-                    if (lineCount <= 200) {
-                        Column(horizontalAlignment = Alignment.End) {
-                            for (i in 1..lineCount) {
-                                val hasError = errorLines.contains(i)
-                                val isCurrentLine = i == currentLineAndCol.first
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.End,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    if (hasError) {
-                                        Text(
-                                            text = "●",
-                                            color = DiscordRed,
-                                            fontSize = 9.sp,
-                                            modifier = Modifier.padding(end = 4.dp)
-                                        )
-                                    } else if (isCurrentLine) {
-                                        Text(
-                                            text = "›",
-                                            color = DiscordBlurple,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(end = 2.dp)
-                                        )
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            if (zoom != 1.0f) {
+                                val oldScale = fontScale
+                                val newScale = (fontScale * zoom).coerceIn(0.65f, 2.5f)
+                                if (kotlin.math.abs(newScale - oldScale) > 0.005f) {
+                                    fontScale = newScale
+                                    showZoomToast = true
+                                    zoomToastJob?.cancel()
+                                    zoomToastJob = editorScope.launch {
+                                        delay(1400)
+                                        showZoomToast = false
                                     }
-                                    Text(
-                                        text = "$i",
-                                        color = if (hasError) DiscordRed
-                                        else if (isCurrentLine) DiscordBlurple
-                                        else DiscordTextMuted,
-                                        fontSize = 13.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = if (hasError || isCurrentLine) FontWeight.Bold else FontWeight.Normal,
-                                        lineHeight = 20.sp
-                                    )
                                 }
                             }
                         }
-                    } else {
-                        // High-performance single-Text rendering for large files (prevents Compose slot table OOM)
-                        Text(
-                            text = lineNumbersString,
-                            color = DiscordTextMuted,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 20.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End
+                    }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(TerminalBg)
+                        .verticalScroll(scrollState)
+                ) {
+                    // Line numbers column with active line highlight and error indicators
+                    val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
+
+                    Box(
+                        modifier = Modifier
+                            .background(DiscordDarker)
+                            .border(
+                                width = 0.5.dp,
+                                color = DiscordHover,
+                                shape = RoundedCornerShape(0.dp)
+                            )
+                            .padding(vertical = 8.dp, horizontal = 6.dp)
+                            .widthIn(min = 40.dp),
+                        contentAlignment = Alignment.TopEnd
+                    ) {
+                        if (lineCount <= 200) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                for (i in 1..lineCount) {
+                                    val hasError = errorLines.contains(i)
+                                    val isCurrentLine = i == currentLineAndCol.first
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.End,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        if (hasError) {
+                                            Text(
+                                                text = "●",
+                                                color = DiscordRed,
+                                                fontSize = (9f * fontScale).sp,
+                                                modifier = Modifier.padding(end = 4.dp)
+                                            )
+                                        } else if (isCurrentLine) {
+                                            Text(
+                                                text = "›",
+                                                color = DiscordBlurple,
+                                                fontSize = (12f * fontScale).sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(end = 2.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = "$i",
+                                            color = if (hasError) DiscordRed
+                                            else if (isCurrentLine) DiscordBlurple
+                                            else DiscordTextMuted,
+                                            fontSize = currentFontSize,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = if (hasError || isCurrentLine) FontWeight.Bold else FontWeight.Normal,
+                                            lineHeight = currentLineHeight
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // High-performance single-Text rendering for large files (prevents Compose slot table OOM)
+                            Text(
+                                text = lineNumbersString,
+                                color = DiscordTextMuted,
+                                fontSize = currentFontSize,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = currentLineHeight,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.End
+                            )
+                        }
+                    }
+
+                    // Editor content text field with IntelliSense trigger on value change
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(8.dp)
+                    ) {
+                        BasicTextField(
+                            value = textFieldValue,
+                            onValueChange = { newValue ->
+                                textFieldValue = newValue
+                                viewModel.updateActiveFileContent(newValue.text)
+                                showIntelliSenseBar = true
+                                showSignatureHelp = true
+                            },
+                            visualTransformation = syntaxTransformation,
+                            textStyle = TextStyle(
+                                color = DiscordTextPrimary,
+                                fontSize = currentFontSize,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = currentLineHeight
+                            ),
+                            cursorBrush = SolidColor(DiscordBlurple),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("code_editor_input")
                         )
                     }
                 }
 
-                // Editor content text field with IntelliSense trigger on value change
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(8.dp)
-                ) {
-                    BasicTextField(
-                        value = textFieldValue,
-                        onValueChange = { newValue ->
-                            textFieldValue = newValue
-                            viewModel.updateActiveFileContent(newValue.text)
-                            showIntelliSenseBar = true
-                            showSignatureHelp = true
-                        },
-                        visualTransformation = syntaxTransformation,
-                        textStyle = TextStyle(
-                            color = DiscordTextPrimary,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 20.sp
-                        ),
-                        cursorBrush = SolidColor(DiscordBlurple),
+                // Floating Zoom Feedback Pill
+                if (showZoomToast) {
+                    Surface(
+                        color = DiscordElevated.copy(alpha = 0.92f),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("code_editor_input")
-                    )
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "🔍 Zoom: ${(fontScale * 100).toInt()}%",
+                                color = DiscordTextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -901,11 +1068,67 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     )
                 }
 
-                // Diagnostics and Encoding status
+                // Diagnostics, Zoom controls and Encoding status
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Zoom In / Out Controls
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Surface(
+                            color = DiscordHover,
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .clickable {
+                                    fontScale = (fontScale - 0.1f).coerceIn(0.65f, 2.5f)
+                                }
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "－",
+                                color = DiscordTextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Surface(
+                            color = if (fontScale != 1.0f) DiscordBlurple.copy(alpha = 0.2f) else Color.Transparent,
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .clickable { fontScale = 1.0f }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "${(fontScale * 100).toInt()}%",
+                                color = if (fontScale != 1.0f) DiscordBlurple else DiscordTextMuted,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Surface(
+                            color = DiscordHover,
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .clickable {
+                                    fontScale = (fontScale + 0.1f).coerceIn(0.65f, 2.5f)
+                                }
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "＋",
+                                color = DiscordTextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
                     Surface(
                         color = if (diagnostics.isNotEmpty()) DiscordRed.copy(alpha = 0.2f) else DiscordGreen.copy(alpha = 0.2f),
                         shape = RoundedCornerShape(3.dp),

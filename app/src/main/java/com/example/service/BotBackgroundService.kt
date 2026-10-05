@@ -39,6 +39,7 @@ class BotBackgroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var notificationUpdaterJob: Job? = null
 
@@ -104,6 +105,7 @@ class BotBackgroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         acquireSystemLocks()
+        registerNetworkWatcher()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -180,10 +182,40 @@ class BotBackgroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        unregisterNetworkWatcher()
         notificationUpdaterJob?.cancel()
         serviceScope.cancel()
         releaseSystemLocks()
         super.onDestroy()
+    }
+
+    private fun registerNetworkWatcher() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            if (networkCallback == null && cm != null) {
+                val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        super.onAvailable(network)
+                        val engine = BotRuntimeManager.currentEngine()
+                        if (engine != null && isBotMarkedRunning(this@BotBackgroundService)) {
+                            if (!engine.isRealDiscordConnected.value && activeProjectId > 0) {
+                                ensureBotEngineRunning(activeProjectId)
+                            }
+                        }
+                    }
+                }
+                cm.registerDefaultNetworkCallback(callback)
+                networkCallback = callback
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun unregisterNetworkWatcher() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            networkCallback?.let { cm?.unregisterNetworkCallback(it) }
+        } catch (_: Exception) {}
+        networkCallback = null
     }
 
     private fun ensureBotEngineRunning(projectId: Long) {

@@ -822,7 +822,7 @@ class BotRuntimeEngine(
     }
 
     /**
-     * Heartbeat loop with ACK Tracking and Zombie Detection.
+     * Heartbeat loop with Jitter, ACK Tracking, and Zombie Detection (Discord Gateway v10 compliant).
      */
     private fun startRealHeartbeat(projectId: Long, webSocket: WebSocket) {
         heartbeatJob?.cancel()
@@ -831,16 +831,19 @@ class BotRuntimeEngine(
         lastHeartbeatAckAt = System.currentTimeMillis()
 
         heartbeatJob = scope.launch(Dispatchers.IO) {
-            while (isActive && _isRunning.value) {
-                delay(heartbeatIntervalMs)
+            // Initial heartbeat jitter as required by Discord Gateway specification
+            val jitter = Math.random()
+            val initialDelay = (heartbeatIntervalMs * jitter).toLong().coerceAtLeast(1000L)
+            delay(initialDelay)
 
+            while (isActive && _isRunning.value) {
                 // Zombie connection detection: If previous heartbeat was not ACKed, abort stale socket and reconnect
                 if (isAwaitingAck) {
                     logAsync(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing from Discord. Reconnecting session...", "WARN")
                     try {
-                        webSocket.cancel()
+                        webSocket.close(4000, "Heartbeat ACK missing")
                     } catch (e: Exception) {}
-                    connectRealDiscordGateway(activeProject ?: return@launch, isResumeAttempt = true)
+                    scheduleAutoReconnect(activeProject ?: return@launch, "Zombie connection (ACK missing)")
                     break
                 }
 
@@ -856,6 +859,8 @@ class BotRuntimeEngine(
                 } catch (e: Exception) {
                     break
                 }
+
+                delay(heartbeatIntervalMs)
             }
         }
     }
