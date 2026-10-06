@@ -21,14 +21,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -154,6 +159,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         }
     }
 
+    // Editor Focus Requester for full-canvas tap-to-focus
+    val focusRequester = remember { FocusRequester() }
+
     // Pinch-to-zoom editor scaling
     var fontScale by remember { mutableFloatStateOf(1.0f) }
     var showZoomToast by remember { mutableStateOf(false) }
@@ -167,15 +175,29 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(fileContent, TextRange(fileContent.length)))
     }
+    var lastEditorText by remember { mutableStateOf(fileContent) }
+
+    // Ensure an active file is selected whenever files exist but activeFile is null
+    LaunchedEffect(files, activeFile) {
+        if (files.isNotEmpty() && (activeFile == null || !files.any { it.id == activeFile?.id })) {
+            val entry = files.find { it.isEntrypoint } ?: files.first()
+            viewModel.selectFile(entry)
+        }
+    }
 
     // Reset textFieldValue whenever active file changes to the new file's content
     LaunchedEffect(activeFile?.id) {
-        val currentContent = activeFile?.content ?: viewModel.activeFileContent.value
-        textFieldValue = TextFieldValue(currentContent, TextRange(0))
+        if (activeFile != null) {
+            val currentContent = activeFile?.content ?: viewModel.activeFileContent.value
+            textFieldValue = TextFieldValue(currentContent, TextRange(currentContent.length))
+            lastEditorText = currentContent
+        }
     }
 
+    // Only sync if fileContent changed from an external source (not from typing)
     LaunchedEffect(fileContent) {
-        if (textFieldValue.text != fileContent) {
+        if (fileContent != lastEditorText && fileContent != textFieldValue.text) {
+            lastEditorText = fileContent
             val safeStart = textFieldValue.selection.start.coerceIn(0, fileContent.length)
             val safeEnd = textFieldValue.selection.end.coerceIn(0, fileContent.length)
             textFieldValue = textFieldValue.copy(text = fileContent, selection = TextRange(safeStart, safeEnd))
@@ -255,6 +277,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             cursorPosition,
             item
         )
+        lastEditorText = newCode
         textFieldValue = TextFieldValue(newCode, TextRange(newCursor))
         viewModel.updateActiveFileContent(newCode)
     }
@@ -265,6 +288,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         val oldText = textFieldValue.text
         val newText = oldText.substring(0, selStart) + symbol + oldText.substring(selEnd)
         val newCursor = selStart + symbol.length
+        lastEditorText = newText
         textFieldValue = TextFieldValue(newText, TextRange(newCursor))
         viewModel.updateActiveFileContent(newText)
     }
@@ -513,8 +537,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     .heightIn(min = 32.dp)
                     .clickable {
                         val formatted = formatSourceCode(textFieldValue.text, activeFile?.filePath ?: "")
-                        viewModel.updateActiveFileContent(formatted)
+                        lastEditorText = formatted
                         textFieldValue = TextFieldValue(formatted, TextRange(formatted.length))
+                        viewModel.updateActiveFileContent(formatted)
                     }
             ) {
                 Row(
@@ -547,6 +572,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     .clickable {
                         viewModel.autoFixActiveFile { count, fixes ->
                             if (count > 0) {
+                                val newContent = viewModel.activeFileContent.value
+                                lastEditorText = newContent
+                                textFieldValue = TextFieldValue(newContent, TextRange(newContent.length))
                                 val summary = fixes.take(2).joinToString("; ")
                                 Toast.makeText(context, "⚡ Auto-fixed $count issue(s): $summary", Toast.LENGTH_LONG).show()
                             } else {
@@ -866,25 +894,36 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 sb.toString()
             }
 
+            val horizontalScrollState = rememberScrollState()
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .pointerInput(Unit) {
-                        detectTransformGestures { _, _, zoom, _ ->
-                            if (zoom != 1.0f) {
-                                val oldScale = fontScale
-                                val newScale = (fontScale * zoom).coerceIn(0.65f, 2.5f)
-                                if (kotlin.math.abs(newScale - oldScale) > 0.005f) {
-                                    fontScale = newScale
-                                    showZoomToast = true
-                                    zoomToastJob?.cancel()
-                                    zoomToastJob = editorScope.launch {
-                                        delay(1400)
-                                        showZoomToast = false
+                        awaitEachGesture {
+                            do {
+                                val event = awaitPointerEvent()
+                                // Pinch-to-zoom: ONLY consume when 2 or more fingers are down!
+                                // Single-finger touches pass through for cursor, selection & scrolling.
+                                if (event.changes.size >= 2) {
+                                    val zoom = event.calculateZoom()
+                                    if (zoom != 1.0f) {
+                                        val oldScale = fontScale
+                                        val newScale = (fontScale * zoom).coerceIn(0.65f, 2.5f)
+                                        if (kotlin.math.abs(newScale - oldScale) > 0.003f) {
+                                            fontScale = newScale
+                                            showZoomToast = true
+                                            zoomToastJob?.cancel()
+                                            zoomToastJob = editorScope.launch {
+                                                delay(1400)
+                                                showZoomToast = false
+                                            }
+                                        }
+                                        event.changes.forEach { it.consume() }
                                     }
                                 }
-                            }
+                            } while (event.changes.any { it.pressed })
                         }
                     }
             ) {
@@ -893,6 +932,12 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         .fillMaxSize()
                         .background(TerminalBg)
                         .verticalScroll(scrollState)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            focusRequester.requestFocus()
+                        }
                 ) {
                     // Line numbers column with active line highlight and error indicators
                     val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
@@ -966,11 +1011,19 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
+                            .horizontalScroll(horizontalScrollState)
                             .padding(8.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                focusRequester.requestFocus()
+                            }
                     ) {
                         BasicTextField(
                             value = textFieldValue,
                             onValueChange = { newValue ->
+                                lastEditorText = newValue.text
                                 textFieldValue = newValue
                                 viewModel.updateActiveFileContent(newValue.text)
                                 showIntelliSenseBar = true
@@ -986,6 +1039,8 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             cursorBrush = SolidColor(DiscordBlurple),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .defaultMinSize(minHeight = 500.dp)
+                                .focusRequester(focusRequester)
                                 .testTag("code_editor_input")
                         )
                     }
@@ -1301,6 +1356,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 Button(
                     onClick = {
                         showClearConfirmDialog = false
+                        lastEditorText = ""
                         textFieldValue = TextFieldValue("", TextRange(0))
                         viewModel.updateActiveFileContent("")
                         viewModel.saveActiveFile()
