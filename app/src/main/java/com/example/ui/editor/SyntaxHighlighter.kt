@@ -17,10 +17,13 @@ import com.example.ui.theme.SyntaxNumber
 import com.example.ui.theme.SyntaxString
 import com.example.ui.theme.SyntaxType
 
-class SyntaxHighlightTransformation(private val filePath: String) : VisualTransformation {
+class SyntaxHighlightTransformation(
+    private val filePath: String
+) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
+        val raw = text.text
         return try {
-            val highlighted = SyntaxHighlighter.highlight(text.text, filePath)
+            val highlighted = SyntaxHighlighter.highlight(raw, filePath)
             TransformedText(
                 text = highlighted,
                 offsetMapping = OffsetMapping.Identity

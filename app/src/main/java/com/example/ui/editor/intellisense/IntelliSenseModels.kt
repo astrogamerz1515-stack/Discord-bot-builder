@@ -38,3 +38,11 @@ data class ParameterInfo(
     val documentation: String,
     val isOptional: Boolean = false
 )
+
+data class InlineSuggestion(
+    val completionText: String,
+    val displayPreview: String,
+    val triggerSource: String = "AI Suggestion",
+    val cursorOffset: Int,
+    val nextWord: String = ""
+)

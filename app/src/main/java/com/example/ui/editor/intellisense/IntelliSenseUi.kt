@@ -214,6 +214,150 @@ fun IntelliSenseBar(
 }
 
 /**
+ * Modern floating/docked Copilot-style Inline Suggestion bar.
+ * Displays real-time code predictions with [Tab ⇥ Accept], [Word ▶], and [Dismiss ✕].
+ */
+@Composable
+fun InlineSuggestionBar(
+    suggestion: InlineSuggestion,
+    onAccept: () -> Unit,
+    onAcceptWord: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = true,
+        enter = slideInVertically { it / 2 } + fadeIn(),
+        exit = slideOutVertically { it / 2 } + fadeOut()
+    ) {
+        Surface(
+            color = DiscordDarker,
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Sparkle Badge
+                Surface(
+                    color = DiscordBlurple.copy(alpha = 0.25f),
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier.padding(end = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "✨ ${suggestion.triggerSource}",
+                            color = DiscordBlurple,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Suggestion Preview Text (clickable to accept)
+                Surface(
+                    color = DiscordElevated,
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onAccept() }
+                        .testTag("inline_suggestion_preview_clickable")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = suggestion.displayPreview,
+                            color = DiscordTextPrimary,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .horizontalScroll(rememberScrollState())
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Tap to Insert",
+                            color = DiscordGreen,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Partial accept (Word) button if multi-word
+                if (suggestion.nextWord.isNotBlank() && suggestion.nextWord != suggestion.completionText) {
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover),
+                        modifier = Modifier
+                            .clickable { onAcceptWord() }
+                            .padding(end = 4.dp)
+                            .testTag("btn_accept_inline_word")
+                    ) {
+                        Text(
+                            text = "Word ▶",
+                            color = DiscordTextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                // Full Accept Button (Click to complete)
+                Button(
+                    onClick = onAccept,
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("btn_accept_inline_suggestion")
+                ) {
+                    Text(
+                        text = "Complete ↵",
+                        color = Color.Black,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Dismiss Button
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss Suggestion",
+                        tint = DiscordTextMuted,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * Signature help banner displaying parameter hints when typing inside function calls.
  */
 @Composable

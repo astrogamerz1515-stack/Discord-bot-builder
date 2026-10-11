@@ -10,6 +10,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,12 +30,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.VerticalAlignBottom
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -81,10 +88,30 @@ fun Modifier.draggableBlock(
 }
 
 /**
+ * Immediate drag modifier for the drag handle icon.
+ */
+fun Modifier.draggableHandle(
+    onDragStart: (Offset) -> Unit = {},
+    onDrag: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
+    onDragCancel: () -> Unit = {}
+): Modifier = this.pointerInput(Unit) {
+    detectDragGestures(
+        onDragStart = { offset -> onDragStart(offset) },
+        onDrag = { change, dragAmount ->
+            change.consume()
+            onDrag(dragAmount)
+        },
+        onDragEnd = onDragEnd,
+        onDragCancel = onDragCancel
+    )
+}
+
+/**
  * Scratch-style Block Composable.
  * Renders an authentic Scratch-shaped puzzle block with top/bottom interlocking notches,
  * category color coding, interactive parameter bubble capsules, quick action shortcuts,
- * and execution highlighting.
+ * tactile drag-to-move handle, and execution highlighting.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -100,6 +127,14 @@ fun BlockCard(
     canMoveDown: Boolean = true,
     onMoveUp: () -> Unit = {},
     onMoveDown: () -> Unit = {},
+    onMoveToTop: () -> Unit = {},
+    onMoveToBottom: () -> Unit = {},
+    onMoveToPosition: () -> Unit = {},
+    onIndent: () -> Unit = {},
+    onOutdent: () -> Unit = {},
+    onDragStart: (Offset) -> Unit = {},
+    onDrag: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
     onLongPress: () -> Unit = {},
     onClick: () -> Unit = {},
     onPillClick: (String) -> Unit = { onClick() },
@@ -194,7 +229,28 @@ fun BlockCard(
                             .background(category.darkStripColor)
                     )
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    // Tactile drag handle for moving the block anywhere
+                    Box(
+                        modifier = Modifier
+                            .size(width = 24.dp, height = 44.dp)
+                            .draggableHandle(
+                                onDragStart = onDragStart,
+                                onDrag = onDrag,
+                                onDragEnd = onDragEnd,
+                                onDragCancel = onDragEnd
+                            )
+                            .testTag("drag_handle_$title"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DragIndicator,
+                            contentDescription = "Drag to move block anywhere",
+                            tint = VisualBuilderThemeColors.TextInsideBlock.copy(alpha = 0.72f),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(2.dp))
 
                     // Block Icon (⚡, 💬, ⚙️, 🔀, etc.)
                     Text(
@@ -340,6 +396,73 @@ fun BlockCard(
                                 .border(BorderStroke(1.dp, VisualBuilderThemeColors.Border))
                                 .testTag("menu_block_options")
                         ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.FormatListNumbered, contentDescription = null, tint = VisualBuilderThemeColors.Primary, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Move to Position...", fontFamily = FontFamily.Monospace, color = VisualBuilderThemeColors.Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onMoveToPosition()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.VerticalAlignTop, contentDescription = null, tint = VisualBuilderThemeColors.OnBackground, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Move to Top", fontFamily = FontFamily.Monospace, color = VisualBuilderThemeColors.OnBackground, fontSize = 12.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onMoveToTop()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.VerticalAlignBottom, contentDescription = null, tint = VisualBuilderThemeColors.OnBackground, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Move to Bottom", fontFamily = FontFamily.Monospace, color = VisualBuilderThemeColors.OnBackground, fontSize = 12.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onMoveToBottom()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = VisualBuilderThemeColors.OnBackground, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Indent (Nest inside) →", fontFamily = FontFamily.Monospace, color = VisualBuilderThemeColors.OnBackground, fontSize = 12.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onIndent()
+                                }
+                            )
+                            if (indentLevel > 0) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = VisualBuilderThemeColors.OnBackground, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("← Outdent (Un-nest)", fontFamily = FontFamily.Monospace, color = VisualBuilderThemeColors.OnBackground, fontSize = 12.sp)
+                                        }
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onOutdent()
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {

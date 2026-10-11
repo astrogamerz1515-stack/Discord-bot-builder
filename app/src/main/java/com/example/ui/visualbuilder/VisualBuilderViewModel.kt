@@ -119,7 +119,7 @@ class VisualBuilderViewModel : ViewModel() {
     }
 
     fun zoomOut() {
-        _canvasZoom.value = (_canvasZoom.value - 0.15f).coerceAtLeast(0.6f)
+        _canvasZoom.value = (_canvasZoom.value - 0.15f).coerceAtLeast(0.45f)
     }
 
     fun resetZoom() {
@@ -272,6 +272,12 @@ class VisualBuilderViewModel : ViewModel() {
         _draggedBlock.value = block
         _dragPosition.value = initialOffset
         _isDragging.value = true
+        val idx = _blocks.value.indexOfFirst { it.id == block.id }
+        _dropTargetIndex.value = if (idx >= 0) idx else _blocks.value.size
+    }
+
+    fun setDropTargetIndex(index: Int) {
+        _dropTargetIndex.value = index.coerceIn(0, _blocks.value.size)
     }
 
     fun updateDrag(delta: Offset, canvasY: Float? = null) {
@@ -296,11 +302,17 @@ class VisualBuilderViewModel : ViewModel() {
             val existingIndex = currentList.indexOfFirst { it.id == block.id }
             if (existingIndex >= 0) {
                 currentList.removeAt(existingIndex)
-                val safeIdx = targetIdx.coerceIn(0, currentList.size)
-                currentList.add(safeIdx, block)
+                val adjustedIdx = if (targetIdx > existingIndex) (targetIdx - 1).coerceIn(0, currentList.size) else targetIdx.coerceIn(0, currentList.size)
+                currentList.add(adjustedIdx, block)
+                viewModelScope.launch {
+                    _snackbarMessage.emit("Moved \"${block.title}\" to position ${adjustedIdx + 1}")
+                }
             } else {
                 val safeIdx = targetIdx.coerceIn(0, currentList.size)
                 currentList.add(safeIdx, block)
+                viewModelScope.launch {
+                    _snackbarMessage.emit("Added \"${block.title}\"")
+                }
             }
             _blocks.value = currentList
         }
@@ -384,6 +396,75 @@ class VisualBuilderViewModel : ViewModel() {
             val item = list.removeAt(idx)
             list.add(idx + 1, item)
             _blocks.value = list
+        }
+    }
+
+    fun moveBlockToTop(blockId: String) {
+        val list = _blocks.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == blockId }
+        if (idx > 0) {
+            pushHistoryState()
+            val item = list.removeAt(idx)
+            list.add(0, item)
+            _blocks.value = list
+            viewModelScope.launch {
+                _snackbarMessage.emit("Moved \"${item.title}\" to top")
+            }
+        }
+    }
+
+    fun moveBlockToBottom(blockId: String) {
+        val list = _blocks.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && idx < list.size - 1) {
+            pushHistoryState()
+            val item = list.removeAt(idx)
+            list.add(item)
+            _blocks.value = list
+            viewModelScope.launch {
+                _snackbarMessage.emit("Moved \"${item.title}\" to bottom")
+            }
+        }
+    }
+
+    fun moveBlockToPosition(blockId: String, newIndex: Int) {
+        val list = _blocks.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == blockId }
+        if (idx >= 0) {
+            pushHistoryState()
+            val item = list.removeAt(idx)
+            val safeIdx = newIndex.coerceIn(0, list.size)
+            list.add(safeIdx, item)
+            _blocks.value = list
+            viewModelScope.launch {
+                _snackbarMessage.emit("Moved \"${item.title}\" to position ${safeIdx + 1}")
+            }
+        }
+    }
+
+    fun indentBlock(blockId: String) {
+        pushHistoryState()
+        val list = _blocks.value.map { block ->
+            if (block.id == blockId) {
+                block.copy(indentLevel = (block.indentLevel + 1).coerceAtMost(3))
+            } else block
+        }
+        _blocks.value = list
+        viewModelScope.launch {
+            _snackbarMessage.emit("Indented block ↳")
+        }
+    }
+
+    fun outdentBlock(blockId: String) {
+        pushHistoryState()
+        val list = _blocks.value.map { block ->
+            if (block.id == blockId) {
+                block.copy(indentLevel = (block.indentLevel - 1).coerceAtLeast(0))
+            } else block
+        }
+        _blocks.value = list
+        viewModelScope.launch {
+            _snackbarMessage.emit("Outdented block ↲")
         }
     }
 

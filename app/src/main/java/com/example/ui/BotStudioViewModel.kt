@@ -183,7 +183,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
         viewModelScope.launch {
             allProjects.collect { projects ->
-                if (_currentProject.value == null && projects.isNotEmpty()) {
+                if (projects.isEmpty()) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val database = com.example.data.database.AppDatabase.getDatabase(application)
+                        com.example.data.templates.BotTemplates.seedDefaultProjects(database)
+                    }
+                } else if (_currentProject.value == null) {
                     val target = if (isMarkedRunning && savedRunningId > 0) {
                         projects.find { it.id == savedRunningId } ?: projects.first()
                     } else {
@@ -267,6 +272,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateActiveFileContent(newContent: String) {
         _activeFileContent.value = newContent
+        _activeFile.value = _activeFile.value?.copy(content = newContent)
 
         // Smooth background debounced linting to prevent typing stutter
         diagnosticsJob?.cancel()

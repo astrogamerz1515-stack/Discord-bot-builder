@@ -21,9 +21,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -85,6 +88,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -144,6 +148,7 @@ fun VisualBuilderScreen(
     val canvasZoom by viewModel.canvasZoom.collectAsState()
 
     var showClearDialog by remember { mutableStateOf(false) }
+    var selectedBlockForPositionMove by remember { mutableStateOf<VisualBlock?>(null) }
     val lazyListState = rememberLazyListState()
 
     // Listen to snackbar messages
@@ -311,13 +316,15 @@ fun VisualBuilderScreen(
                                 transformOrigin = TransformOrigin(0.5f, 0f)
                             }
                             .testTag("canvas_block_stack"),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 320.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         itemsIndexed(
                             items = blocks,
                             key = { _, block -> block.id }
                         ) { index, block ->
+                            val isThisBlockBeingDragged = (isDragging && draggedBlock?.id == block.id)
+
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -345,8 +352,19 @@ fun VisualBuilderScreen(
                                     canMoveDown = (index < blocks.size - 1),
                                     onMoveUp = { viewModel.moveBlockUp(block.id) },
                                     onMoveDown = { viewModel.moveBlockDown(block.id) },
-                                    onLongPress = {
-                                        viewModel.startDragCanvasBlock(block, Offset.Zero)
+                                    onMoveToTop = { viewModel.moveBlockToTop(block.id) },
+                                    onMoveToBottom = { viewModel.moveBlockToBottom(block.id) },
+                                    onMoveToPosition = { selectedBlockForPositionMove = block },
+                                    onIndent = { viewModel.indentBlock(block.id) },
+                                    onOutdent = { viewModel.outdentBlock(block.id) },
+                                    onDragStart = { offset ->
+                                        viewModel.startDragCanvasBlock(block, offset)
+                                    },
+                                    onDrag = { delta ->
+                                        viewModel.updateDrag(delta)
+                                    },
+                                    onDragEnd = {
+                                        viewModel.endDrag(success = true)
                                     },
                                     onClick = {
                                         viewModel.openEditSheet(block)
@@ -359,7 +377,8 @@ fun VisualBuilderScreen(
                                     },
                                     onDuplicate = {
                                         viewModel.duplicateBlock(block.id)
-                                    }
+                                    },
+                                    modifier = if (isThisBlockBeingDragged) Modifier.alpha(0.35f) else Modifier
                                 )
 
                                 // Render closing cap block for containers
@@ -379,36 +398,33 @@ fun VisualBuilderScreen(
                                 DropTargetIndicator(category = draggedBlock?.category ?: BlockCategory.EVENT)
                             }
                         }
+
+                        // Extended Canvas Workspace Drop / Append Area
+                        item {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            CanvasAppendArea(
+                                isDragging = isDragging,
+                                onClick = { viewModel.togglePalette() }
+                            )
+                        }
                     }
                 }
             }
 
-            // Actively dragged floating block overlay
+            // Actively dragged compact floating block overlay (sleek, small size)
             if (isDragging && draggedBlock != null) {
-                val scale by animateFloatAsState(
-                    targetValue = 1.04f,
-                    animationSpec = tween(120),
-                    label = "dragScale"
-                )
                 Box(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                x = (dragPosition.x - 60f).roundToInt(),
-                                y = (dragPosition.y - 36f).roundToInt()
+                                x = (dragPosition.x - 75f).roundToInt(),
+                                y = (dragPosition.y - 45f).roundToInt()
                             )
                         }
-                        .scale(scale)
-                        .shadow(elevation = 10.dp, shape = RoundedCornerShape(10.dp), ambientColor = Color.Black.copy(alpha = 0.4f))
+                        .shadow(elevation = 14.dp, shape = RoundedCornerShape(8.dp), ambientColor = Color.Black.copy(alpha = 0.5f))
+                        .testTag("dragging_block_ghost")
                 ) {
-                    BlockCard(
-                        category = draggedBlock!!.category,
-                        title = draggedBlock!!.title,
-                        subtitle = draggedBlock!!.subtitle,
-                        icon = draggedBlock!!.icon,
-                        inlineTokens = draggedBlock!!.inlineTokens,
-                        modifier = Modifier.width(280.dp)
-                    )
+                    DraggingBlockGhost(block = draggedBlock!!)
                 }
             }
 
@@ -966,6 +982,22 @@ fun VisualBuilderScreen(
             },
             containerColor = VisualBuilderThemeColors.Surface,
             shape = RoundedCornerShape(12.dp)
+        )
+    }
+
+    // Modal Dialog: Move Block to Position
+    if (selectedBlockForPositionMove != null) {
+        val targetBlock = selectedBlockForPositionMove!!
+        val currentPos = blocks.indexOfFirst { it.id == targetBlock.id }
+        MoveToPositionDialog(
+            block = targetBlock,
+            currentPosition = currentPos,
+            totalBlocks = blocks.size,
+            onSelectPosition = { targetPos ->
+                viewModel.moveBlockToPosition(targetBlock.id, targetPos)
+                selectedBlockForPositionMove = null
+            },
+            onDismiss = { selectedBlockForPositionMove = null }
         )
     }
 }
@@ -1855,6 +1887,261 @@ fun TrashDropZone(
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFFF5555)
             )
+        }
+    }
+}
+
+/**
+ * Compact, lightweight dragging ghost preview to keep the canvas visible while moving.
+ */
+@Composable
+fun DraggingBlockGhost(
+    block: VisualBlock,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .width(160.dp)
+            .height(36.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = block.category.color.copy(alpha = 0.95f),
+        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.9f)),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Category dark strip
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(block.category.darkStripColor)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = block.icon,
+                fontSize = 15.sp
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = block.title,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = VisualBuilderThemeColors.TextInsideBlock,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "MOVE",
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Visual drop and append area extending the bottom of the canvas workspace.
+ */
+@Composable
+fun CanvasAppendArea(
+    isDragging: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .testTag("canvas_append_area"),
+        color = if (isDragging) VisualBuilderThemeColors.Primary.copy(alpha = 0.08f) else VisualBuilderThemeColors.Surface.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(
+            1.dp,
+            if (isDragging) VisualBuilderThemeColors.Primary.copy(alpha = 0.6f) else VisualBuilderThemeColors.Border.copy(alpha = 0.6f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                tint = if (isDragging) VisualBuilderThemeColors.Primary else VisualBuilderThemeColors.OnSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isDragging) "Drop block here to place at bottom" else "Tap or drag blocks here to expand canvas",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = if (isDragging) VisualBuilderThemeColors.Primary else VisualBuilderThemeColors.OnSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Dialog allowing users to select any exact position slot on the canvas to move a block.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MoveToPositionDialog(
+    block: VisualBlock,
+    currentPosition: Int,
+    totalBlocks: Int,
+    onSelectPosition: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = VisualBuilderThemeColors.Surface,
+            border = BorderStroke(1.dp, VisualBuilderThemeColors.Border),
+            shadowElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = block.icon, fontSize = 20.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Move Block",
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = VisualBuilderThemeColors.OnBackground
+                            )
+                            Text(
+                                text = block.title,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = VisualBuilderThemeColors.Primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = VisualBuilderThemeColors.OnSurfaceVariant, modifier = Modifier.size(16.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Select destination position in canvas (1 to $totalBlocks):",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = VisualBuilderThemeColors.OnSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    for (i in 0 until totalBlocks) {
+                        val isCurrent = (i == currentPosition)
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSelectPosition(i) }
+                                .testTag("btn_move_to_pos_${i + 1}"),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isCurrent) VisualBuilderThemeColors.Primary.copy(alpha = 0.2f) else VisualBuilderThemeColors.SurfaceVariant,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isCurrent) VisualBuilderThemeColors.Primary else VisualBuilderThemeColors.Border
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Slot ${i + 1}",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isCurrent) VisualBuilderThemeColors.Primary else VisualBuilderThemeColors.OnBackground
+                                )
+                                if (isCurrent) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "(Current)",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = VisualBuilderThemeColors.Primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { onSelectPosition(0) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = VisualBuilderThemeColors.SurfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Top", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = VisualBuilderThemeColors.OnBackground)
+                    }
+                    Button(
+                        onClick = { onSelectPosition(totalBlocks - 1) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = VisualBuilderThemeColors.SurfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Bottom", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = VisualBuilderThemeColors.OnBackground)
+                    }
+                }
+            }
         }
     }
 }

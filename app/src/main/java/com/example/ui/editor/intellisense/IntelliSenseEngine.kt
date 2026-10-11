@@ -16,19 +16,38 @@ object IntelliSenseEngine {
         val isPython = filePath.endsWith(".py", ignoreCase = true)
 
         // Find the current token being typed
-        val lastWordMatch = Regex("([A-Za-z0-9_$.]+)$").find(textBeforeCursor)
+        val lastWordMatch = Regex("([A-Za-z0-9_$.:]+)$").find(textBeforeCursor)
         val currentToken = lastWordMatch?.value ?: ""
 
-        val baseItems = if (isPython) {
-            IntelliSenseRegistry.DISCORD_PY_ITEMS
-        } else {
-            IntelliSenseRegistry.DISCORD_JS_ITEMS
+        val baseItems = IntelliSenseRegistry.getItemsForFile(filePath).toMutableList()
+
+        // Extract in-file identifiers dynamically
+        if (code.length < 150_000 && currentToken.length >= 2) {
+            val fileIdentifiers = Regex("""\b(?:const|let|var|function|def|class|val|fun|local)\s+([A-Za-z0-9_$]+)""")
+                .findAll(code)
+                .map { it.groupValues[1] }
+                .filter { it.contains(currentToken, ignoreCase = true) && it != currentToken }
+                .distinct()
+                .take(6)
+                .map { id ->
+                    CompletionItem(
+                        label = id,
+                        insertText = id,
+                        kind = CompletionKind.PROPERTY,
+                        detail = "Symbol defined in current file",
+                        documentation = "In-file identifier '$id'.",
+                        category = "File"
+                    )
+                }
+            baseItems.addAll(0, fileIdentifiers.toList())
         }
 
-        // If typing after a dot (e.g. "interaction.", "embed.", "client.")
-        if (currentToken.contains('.')) {
-            val prefix = currentToken.substringBeforeLast('.') + "."
-            val memberPart = currentToken.substringAfterLast('.')
+        // If typing after a dot or colon (e.g. "interaction.", "embed.", "client:", "message:")
+        if (currentToken.contains('.') || currentToken.contains(':')) {
+            val isColon = currentToken.contains(':') && !currentToken.contains('.')
+            val separator = if (isColon) ":" else "."
+            val prefix = currentToken.substringBeforeLast(separator) + separator
+            val memberPart = currentToken.substringAfterLast(separator)
 
             val matchingItems = baseItems.filter { item ->
                 item.label.startsWith(prefix, ignoreCase = true) ||
@@ -37,10 +56,10 @@ object IntelliSenseEngine {
 
             if (matchingItems.isNotEmpty()) {
                 return matchingItems.filter { item ->
-                    val memberName = item.label.substringAfterLast('.')
+                    val memberName = item.label.substringAfterLast(separator)
                     memberPart.isEmpty() || memberName.contains(memberPart, ignoreCase = true)
                 }.sortedBy { item ->
-                    val memberName = item.label.substringAfterLast('.')
+                    val memberName = item.label.substringAfterLast(separator)
                     if (memberName.startsWith(memberPart, ignoreCase = true)) 0 else 1
                 }
             }

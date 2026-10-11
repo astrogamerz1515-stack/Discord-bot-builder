@@ -29,12 +29,18 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,6 +106,17 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.BotFile
 import com.example.ui.AppTab
 import com.example.ui.BotStudioViewModel
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import com.example.ui.editor.intellisense.InlineSuggestion
+import com.example.ui.editor.intellisense.InlineSuggestionBar
+import com.example.ui.editor.intellisense.InlineSuggestionEngine
 import com.example.ui.editor.intellisense.CompletionItem
 import com.example.ui.editor.intellisense.IntelliSenseBar
 import com.example.ui.editor.intellisense.IntelliSenseDocDialog
@@ -132,10 +149,6 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     val autoSaveEnabled by viewModel.autoSaveEnabled.collectAsState()
     val saveStatus by viewModel.saveStatus.collectAsState()
 
-    val syntaxTransformation = remember(activeFile?.filePath) {
-        SyntaxHighlightTransformation(activeFile?.filePath ?: "index.js")
-    }
-
     var showFilesSheet by remember { mutableStateOf(false) }
     var showDiagnosticsPanel by remember { mutableStateOf(false) }
     var showIntelliSenseExplorer by remember { mutableStateOf(false) }
@@ -144,6 +157,19 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var showSignatureHelp by remember { mutableStateOf(true) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var showFindReplaceBar by remember { mutableStateOf(false) }
+    var showInlineSuggestionBar by remember { mutableStateOf(true) }
+    var inlineDismissedOffset by remember { mutableIntStateOf(-1) }
+
+    // Find & Replace Search State
+    var findQuery by remember { mutableStateOf("") }
+    var replaceQuery by remember { mutableStateOf("") }
+    var matchIndices by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var currentMatchIndex by remember { mutableIntStateOf(0) }
+
+    // Undo / Redo History Stacks
+    val undoStack = remember { mutableStateListOf<TextFieldValue>() }
+    val redoStack = remember { mutableStateListOf<TextFieldValue>() }
 
     val context = LocalContext.current
 
@@ -159,8 +185,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         }
     }
 
-    // Editor Focus Requester for full-canvas tap-to-focus
+    // Editor Focus Requester and Software Keyboard Controller
     val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // Pinch-to-zoom editor scaling
     var fontScale by remember { mutableFloatStateOf(1.0f) }
@@ -191,6 +218,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             val currentContent = activeFile?.content ?: viewModel.activeFileContent.value
             textFieldValue = TextFieldValue(currentContent, TextRange(currentContent.length))
             lastEditorText = currentContent
+            undoStack.clear()
+            redoStack.clear()
+            inlineDismissedOffset = -1
         }
     }
 
@@ -222,7 +252,69 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     }
 
     val cursorPosition = textFieldValue.selection.end.coerceIn(0, textFieldValue.text.length)
-    val isPython = activeFile?.filePath?.endsWith(".py", ignoreCase = true) == true
+
+    // Language override state allowing user to switch languages for any file
+    var customLanguageOverride by remember(activeFile?.id) { mutableStateOf<String?>(null) }
+    var showLanguageSelectorDialog by remember { mutableStateOf(false) }
+
+    val effectiveFilePath = remember(activeFile?.filePath, customLanguageOverride) {
+        val path = activeFile?.filePath ?: "index.js"
+        if (customLanguageOverride != null) {
+            val base = if (path.contains('.')) path.substringBeforeLast('.') else path
+            "$base.$customLanguageOverride"
+        } else {
+            path
+        }
+    }
+
+    val currentFileExtension = remember(effectiveFilePath) {
+        effectiveFilePath.substringAfterLast('.', "").lowercase()
+    }
+
+    val currentLanguageDisplayName = remember(currentFileExtension) {
+        when (currentFileExtension) {
+            "js", "mjs", "cjs" -> "JavaScript (v14)"
+            "ts", "tsx" -> "TypeScript"
+            "py" -> "Python 3.x"
+            "json" -> "JSON"
+            "kt", "kts" -> "Kotlin"
+            "lua" -> "Lua"
+            "sql" -> "SQL"
+            "sh", "bash" -> "Shell / Bash"
+            "html", "htm" -> "HTML5"
+            "css" -> "CSS3"
+            "md", "markdown" -> "Markdown"
+            "env", "properties" -> "ENV / Config"
+            "yaml", "yml" -> "YAML"
+            "toml" -> "TOML"
+            else -> currentFileExtension.uppercase().ifEmpty { "Plain Text" }
+        }
+    }
+
+    val isPython = currentFileExtension == "py"
+
+    // Real-time Inline Suggestion Calculation
+    val inlineSuggestion = remember(textFieldValue.text, cursorPosition, effectiveFilePath, isBinaryFile, inlineDismissedOffset) {
+        if (isBinaryFile || textFieldValue.text.length > 250_000 || cursorPosition == inlineDismissedOffset) null
+        else {
+            try {
+                InlineSuggestionEngine.computeInlineSuggestion(
+                    code = textFieldValue.text,
+                    cursorIndex = cursorPosition,
+                    filePath = effectiveFilePath
+                )
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    // Fast and stable syntax highlighting transformation (persists across typing for 60fps responsiveness)
+    val syntaxTransformation = remember(effectiveFilePath) {
+        SyntaxHighlightTransformation(
+            filePath = effectiveFilePath
+        )
+    }
 
     // High-performance allocation-free line & column calculation for huge files
     val currentLineAndCol = remember(textFieldValue.text, cursorPosition) {
@@ -241,14 +333,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     }
 
     // Compute dynamic IntelliSense completions with safety bounds
-    val completions = remember(textFieldValue.text, cursorPosition, activeFile?.filePath, isBinaryFile) {
+    val completions = remember(textFieldValue.text, cursorPosition, effectiveFilePath, isBinaryFile) {
         if (isBinaryFile || textFieldValue.text.length > 250_000) emptyList()
         else {
             try {
                 IntelliSenseEngine.computeCompletions(
                     code = textFieldValue.text,
                     cursorIndex = cursorPosition,
-                    filePath = activeFile?.filePath ?: "index.js"
+                    filePath = effectiveFilePath
                 )
             } catch (_: Throwable) {
                 emptyList()
@@ -272,6 +364,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     }
 
     fun applyCompletionItem(item: CompletionItem) {
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
         val (newCode, newCursor) = IntelliSenseEngine.applyCompletion(
             textFieldValue.text,
             cursorPosition,
@@ -280,22 +375,154 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         lastEditorText = newCode
         textFieldValue = TextFieldValue(newCode, TextRange(newCursor))
         viewModel.updateActiveFileContent(newCode)
+        inlineDismissedOffset = -1
+    }
+
+    fun applyInlineSuggestion(suggestion: InlineSuggestion) {
+        val insert = suggestion.completionText
+        val selStart = textFieldValue.selection.min.coerceIn(0, textFieldValue.text.length)
+        val selEnd = textFieldValue.selection.max.coerceIn(0, textFieldValue.text.length)
+        val oldText = textFieldValue.text
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
+        val newText = oldText.substring(0, selStart) + insert + oldText.substring(selEnd)
+        val newCursor = selStart + insert.length
+        lastEditorText = newText
+        textFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        viewModel.updateActiveFileContent(newText)
+        inlineDismissedOffset = -1
+    }
+
+    fun applyInlineWord(suggestion: InlineSuggestion) {
+        val word = suggestion.nextWord
+        if (word.isEmpty()) return
+        val selStart = textFieldValue.selection.min.coerceIn(0, textFieldValue.text.length)
+        val selEnd = textFieldValue.selection.max.coerceIn(0, textFieldValue.text.length)
+        val oldText = textFieldValue.text
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
+        val newText = oldText.substring(0, selStart) + word + oldText.substring(selEnd)
+        val newCursor = selStart + word.length
+        lastEditorText = newText
+        textFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        viewModel.updateActiveFileContent(newText)
+        inlineDismissedOffset = -1
+    }
+
+    fun undo() {
+        if (undoStack.isNotEmpty()) {
+            val previous = undoStack.removeAt(undoStack.lastIndex)
+            redoStack.add(textFieldValue)
+            lastEditorText = previous.text
+            textFieldValue = previous
+            viewModel.updateActiveFileContent(previous.text)
+            inlineDismissedOffset = -1
+        }
+    }
+
+    fun redo() {
+        if (redoStack.isNotEmpty()) {
+            val next = redoStack.removeAt(redoStack.lastIndex)
+            undoStack.add(textFieldValue)
+            lastEditorText = next.text
+            textFieldValue = next
+            viewModel.updateActiveFileContent(next.text)
+            inlineDismissedOffset = -1
+        }
     }
 
     fun insertAtCursor(symbol: String) {
         val selStart = textFieldValue.selection.min.coerceIn(0, textFieldValue.text.length)
         val selEnd = textFieldValue.selection.max.coerceIn(0, textFieldValue.text.length)
         val oldText = textFieldValue.text
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
         val newText = oldText.substring(0, selStart) + symbol + oldText.substring(selEnd)
         val newCursor = selStart + symbol.length
         lastEditorText = newText
         textFieldValue = TextFieldValue(newText, TextRange(newCursor))
         viewModel.updateActiveFileContent(newText)
+        inlineDismissedOffset = -1
     }
 
     fun moveCursor(delta: Int) {
         val newPos = (textFieldValue.selection.end + delta).coerceIn(0, textFieldValue.text.length)
         textFieldValue = textFieldValue.copy(selection = TextRange(newPos))
+        inlineDismissedOffset = -1
+    }
+
+    // Find & Replace Search Logic
+    LaunchedEffect(findQuery, textFieldValue.text) {
+        if (findQuery.isNotEmpty() && textFieldValue.text.isNotEmpty()) {
+            val list = mutableListOf<Int>()
+            var idx = 0
+            val code = textFieldValue.text
+            while (idx < code.length) {
+                val found = code.indexOf(findQuery, idx, ignoreCase = true)
+                if (found == -1) break
+                list.add(found)
+                idx = found + findQuery.length.coerceAtLeast(1)
+            }
+            matchIndices = list
+            if (currentMatchIndex >= list.size) {
+                currentMatchIndex = 0
+            }
+        } else {
+            matchIndices = emptyList()
+            currentMatchIndex = 0
+        }
+    }
+
+    fun jumpToMatch(index: Int) {
+        if (matchIndices.isNotEmpty() && index in matchIndices.indices) {
+            val start = matchIndices[index]
+            val end = (start + findQuery.length).coerceAtMost(textFieldValue.text.length)
+            textFieldValue = textFieldValue.copy(selection = TextRange(start, end))
+            currentMatchIndex = index
+        }
+    }
+
+    fun findNext() {
+        if (matchIndices.isEmpty()) return
+        val next = (currentMatchIndex + 1) % matchIndices.size
+        jumpToMatch(next)
+    }
+
+    fun findPrev() {
+        if (matchIndices.isEmpty()) return
+        val prev = if (currentMatchIndex - 1 < 0) matchIndices.lastIndex else currentMatchIndex - 1
+        jumpToMatch(prev)
+    }
+
+    fun replaceOne() {
+        if (matchIndices.isEmpty() || findQuery.isEmpty()) return
+        val start = matchIndices[currentMatchIndex]
+        val end = (start + findQuery.length).coerceAtMost(textFieldValue.text.length)
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
+        val oldText = textFieldValue.text
+        val newText = oldText.substring(0, start) + replaceQuery + oldText.substring(end)
+        lastEditorText = newText
+        textFieldValue = TextFieldValue(newText, TextRange(start + replaceQuery.length))
+        viewModel.updateActiveFileContent(newText)
+    }
+
+    fun replaceAll() {
+        if (matchIndices.isEmpty() || findQuery.isEmpty()) return
+        if (undoStack.size > 50) undoStack.removeAt(0)
+        undoStack.add(textFieldValue)
+        redoStack.clear()
+        val count = matchIndices.size
+        val oldText = textFieldValue.text
+        val newText = oldText.replace(findQuery, replaceQuery, ignoreCase = true)
+        lastEditorText = newText
+        textFieldValue = TextFieldValue(newText, TextRange(textFieldValue.selection.end.coerceIn(0, newText.length)))
+        viewModel.updateActiveFileContent(newText)
+        Toast.makeText(context, "Replaced $count occurrence(s)", Toast.LENGTH_SHORT).show()
     }
 
     Column(
@@ -445,6 +672,131 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // Live Inline Suggestion Quick-Accept Pill
+            if (inlineSuggestion != null) {
+                Surface(
+                    color = DiscordGreen,
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier
+                        .heightIn(min = 32.dp)
+                        .clickable { applyInlineSuggestion(inlineSuggestion) }
+                        .testTag("btn_accept_inline_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "✨ Tab ⇥",
+                            color = Color.Black,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = inlineSuggestion.displayPreview.take(22),
+                            color = Color.Black.copy(alpha = 0.85f),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                // Inline Word Partial Accept
+                if (inlineSuggestion.nextWord.isNotBlank() && inlineSuggestion.nextWord != inlineSuggestion.completionText) {
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
+                        modifier = Modifier
+                            .heightIn(min = 32.dp)
+                            .clickable { applyInlineWord(inlineSuggestion) }
+                            .testTag("btn_accept_inline_word_pill")
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                            Text(
+                                text = "Word ▶",
+                                color = DiscordTextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Undo Button
+            Surface(
+                color = if (undoStack.isNotEmpty()) DiscordElevated else DiscordDarker,
+                shape = RoundedCornerShape(4.dp),
+                border = if (undoStack.isNotEmpty()) androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover) else null,
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable(enabled = undoStack.isNotEmpty()) { undo() }
+                    .testTag("btn_undo")
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Undo,
+                        contentDescription = "Undo",
+                        tint = if (undoStack.isNotEmpty()) DiscordTextPrimary else DiscordTextMuted,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+
+            // Redo Button
+            Surface(
+                color = if (redoStack.isNotEmpty()) DiscordElevated else DiscordDarker,
+                shape = RoundedCornerShape(4.dp),
+                border = if (redoStack.isNotEmpty()) androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover) else null,
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable(enabled = redoStack.isNotEmpty()) { redo() }
+                    .testTag("btn_redo")
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Redo,
+                        contentDescription = "Redo",
+                        tint = if (redoStack.isNotEmpty()) DiscordTextPrimary else DiscordTextMuted,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+
+            // Find & Replace Search Toggle Button
+            Surface(
+                color = if (showFindReplaceBar) DiscordBlurple.copy(alpha = 0.25f) else DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                border = if (showFindReplaceBar) androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple) else null,
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { showFindReplaceBar = !showFindReplaceBar }
+                    .testTag("btn_find_replace")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Find & Replace",
+                        tint = if (showFindReplaceBar) DiscordBlurple else DiscordTextSecondary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Find",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
             // IntelliSense API Catalog Explorer Button
             Surface(
                 color = DiscordBlurple,
@@ -604,6 +956,62 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
+            // ⌨ Quick Keyboard Toggle Button
+            Surface(
+                color = DiscordBlurple,
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable {
+                        focusRequester.requestFocus()
+                        keyboardController?.show()
+                    }
+                    .testTag("btn_show_keyboard")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⌨ Keyboard",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Quick Font Zoom In / Out Buttons
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable {
+                        fontScale = (fontScale - 0.1f).coerceIn(0.65f, 2.5f)
+                    }
+                    .testTag("btn_zoom_out")
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Text("A-", color = DiscordTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable {
+                        fontScale = (fontScale + 0.1f).coerceIn(0.65f, 2.5f)
+                    }
+                    .testTag("btn_zoom_in")
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Text("A+", color = DiscordTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
             // Cursor navigation buttons
             Surface(
                 color = DiscordElevated,
@@ -639,21 +1047,30 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
-            // Indent Tab button (2 spaces)
+            // Indent Tab button (accepts suggestion if present, else 2 spaces)
             Surface(
-                color = DiscordElevated,
+                color = if (inlineSuggestion != null) DiscordGreen.copy(alpha = 0.2f) else DiscordElevated,
                 shape = RoundedCornerShape(4.dp),
+                border = if (inlineSuggestion != null) androidx.compose.foundation.BorderStroke(1.dp, DiscordGreen) else null,
                 modifier = Modifier
                     .heightIn(min = 32.dp)
-                    .clickable { insertAtCursor("  ") }
+                    .clickable {
+                        val suggestion = inlineSuggestion
+                        if (suggestion != null) {
+                            applyInlineSuggestion(suggestion)
+                        } else {
+                            insertAtCursor("  ")
+                        }
+                    }
+                    .testTag("btn_tab_indent")
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                     Text(
-                        text = "Tab",
-                        color = DiscordTextPrimary,
+                        text = if (inlineSuggestion != null) "Tab ⇥" else "Tab",
+                        color = if (inlineSuggestion != null) DiscordGreen else DiscordTextPrimary,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = if (inlineSuggestion != null) FontWeight.Bold else FontWeight.SemiBold
                     )
                 }
             }
@@ -795,6 +1212,16 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             }
         }
 
+        // Live Inline Suggestion Banner
+        if (showInlineSuggestionBar && inlineSuggestion != null) {
+            InlineSuggestionBar(
+                suggestion = inlineSuggestion,
+                onAccept = { applyInlineSuggestion(inlineSuggestion) },
+                onAcceptWord = { applyInlineWord(inlineSuggestion) },
+                onDismiss = { inlineDismissedOffset = cursorPosition }
+            )
+        }
+
         // Live Signature Help Parameter Hint Bar if typing inside a function call
         if (showSignatureHelp && signatureHelp != null) {
             SignatureHelpBar(
@@ -903,9 +1330,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             do {
-                                val event = awaitPointerEvent()
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
                                 // Pinch-to-zoom: ONLY consume when 2 or more fingers are down!
-                                // Single-finger touches pass through for cursor, selection & scrolling.
+                                // Single-finger touches pass through cleanly for typing, cursor, and scrolling.
                                 if (event.changes.size >= 2) {
                                     val zoom = event.calculateZoom()
                                     if (zoom != 1.0f) {
@@ -932,30 +1359,31 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         .fillMaxSize()
                         .background(TerminalBg)
                         .verticalScroll(scrollState)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            focusRequester.requestFocus()
-                        }
                 ) {
                     // Line numbers column with active line highlight and error indicators
                     val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
+                    val lineDigits = remember(lineCount) { lineCount.toString().length }
+                    val gutterWidth = remember(lineDigits, fontScale) {
+                        (maxOf(36f, lineDigits * 9f + 20f) * fontScale).dp
+                    }
 
                     Box(
                         modifier = Modifier
+                            .width(gutterWidth)
                             .background(DiscordDarker)
                             .border(
                                 width = 0.5.dp,
                                 color = DiscordHover,
                                 shape = RoundedCornerShape(0.dp)
                             )
-                            .padding(vertical = 8.dp, horizontal = 6.dp)
-                            .widthIn(min = 40.dp),
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
                         contentAlignment = Alignment.TopEnd
                     ) {
                         if (lineCount <= 200) {
-                            Column(horizontalAlignment = Alignment.End) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.End
+                            ) {
                                 for (i in 1..lineCount) {
                                     val hasError = errorLines.contains(i)
                                     val isCurrentLine = i == currentLineAndCol.first
@@ -970,15 +1398,15 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                                 text = "●",
                                                 color = DiscordRed,
                                                 fontSize = (9f * fontScale).sp,
-                                                modifier = Modifier.padding(end = 4.dp)
+                                                modifier = Modifier.padding(end = 2.dp)
                                             )
                                         } else if (isCurrentLine) {
                                             Text(
                                                 text = "›",
                                                 color = DiscordBlurple,
-                                                fontSize = (12f * fontScale).sp,
+                                                fontSize = (11f * fontScale).sp,
                                                 fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(end = 2.dp)
+                                                modifier = Modifier.padding(end = 1.dp)
                                             )
                                         }
                                         Text(
@@ -1002,23 +1430,18 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 fontSize = currentFontSize,
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = currentLineHeight,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.End
+                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
 
-                    // Editor content text field with IntelliSense trigger on value change
+                    // Editor content text field with direct touch access
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .horizontalScroll(horizontalScrollState)
                             .padding(8.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                focusRequester.requestFocus()
-                            }
                     ) {
                         BasicTextField(
                             value = textFieldValue,
@@ -1037,9 +1460,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 lineHeight = currentLineHeight
                             ),
                             cursorBrush = SolidColor(DiscordBlurple),
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.None,
+                                autoCorrectEnabled = false,
+                                keyboardType = KeyboardType.Ascii,
+                                imeAction = ImeAction.None
+                            ),
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .defaultMinSize(minHeight = 500.dp)
+                                .defaultMinSize(minWidth = 800.dp, minHeight = 600.dp)
                                 .focusRequester(focusRequester)
                                 .testTag("code_editor_input")
                         )
@@ -1066,6 +1494,69 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+                    }
+                }
+
+                // Floating Interactive Inline Code Completion Pill directly in the editor view (Click to complete!)
+                if (inlineSuggestion != null) {
+                    Surface(
+                        color = DiscordDarker.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DiscordGreen),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp)
+                            .clickable { applyInlineSuggestion(inlineSuggestion) }
+                            .testTag("floating_inline_completion_pill")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "✨ ${inlineSuggestion.triggerSource}:",
+                                color = DiscordBlurple,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = inlineSuggestion.displayPreview.take(30),
+                                color = DiscordTextPrimary,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                color = DiscordGreen,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .clickable { applyInlineSuggestion(inlineSuggestion) }
+                            ) {
+                                Text(
+                                    text = "Tap to Complete ↵",
+                                    color = Color.Black,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = { inlineDismissedOffset = cursorPosition },
+                                modifier = Modifier.size(20.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss",
+                                    tint = DiscordTextMuted,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1115,12 +1606,33 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         fontSize = 10.sp
                     )
 
-                    Text(
-                        text = if (isPython) "Python 3.x" else "JavaScript (v14)",
-                        color = DiscordBlurple,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    // Clickable Language Selector Chip
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple),
+                        modifier = Modifier
+                            .clickable { showLanguageSelectorDialog = true }
+                            .testTag("btn_select_language_mode")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = currentLanguageDisplayName,
+                                color = DiscordBlurple,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = "▾",
+                                color = DiscordTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
                 }
 
                 // Diagnostics, Zoom controls and Encoding status
@@ -1319,6 +1831,119 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             onDismiss = { selectedDocItem = null },
             onInsert = { itemToInsert ->
                 applyCompletionItem(itemToInsert)
+            }
+        )
+    }
+
+    // Language Mode Selection Dialog
+    if (showLanguageSelectorDialog) {
+        val supportedLanguages = listOf(
+            "js" to "JavaScript (Node.js / Discord.js)",
+            "ts" to "TypeScript",
+            "py" to "Python (discord.py)",
+            "json" to "JSON",
+            "kt" to "Kotlin",
+            "lua" to "Lua (Discordia)",
+            "sh" to "Shell / Bash",
+            "sql" to "SQL (SQLite, PostgreSQL)",
+            "html" to "HTML5",
+            "css" to "CSS3",
+            "md" to "Markdown",
+            "env" to "Environment / Config",
+            "yaml" to "YAML",
+            "toml" to "TOML"
+        )
+
+        AlertDialog(
+            onDismissRequest = { showLanguageSelectorDialog = false },
+            containerColor = DiscordSurface,
+            title = {
+                Text(
+                    text = "Select Language Mode",
+                    color = DiscordTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "Change syntax highlighting, IntelliSense completions, and inline code suggestions for '${activeFile?.filePath ?: "current file"}':",
+                        color = DiscordTextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+
+                    supportedLanguages.forEach { (ext, displayName) ->
+                        val isSelected = currentFileExtension == ext
+                        Surface(
+                            color = if (isSelected) DiscordBlurple.copy(alpha = 0.2f) else DiscordElevated,
+                            shape = RoundedCornerShape(6.dp),
+                            border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple) else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    customLanguageOverride = ext
+                                    showLanguageSelectorDialog = false
+                                    Toast.makeText(context, "Language set to $displayName", Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(vertical = 2.dp)
+                                .testTag("lang_option_$ext")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = when (ext) {
+                                            "js" -> "📜 "
+                                            "ts" -> "🔷 "
+                                            "py" -> "🐍 "
+                                            "json" -> "⚙️ "
+                                            "kt" -> "☕ "
+                                            "lua" -> "🌙 "
+                                            "sh" -> "🐚 "
+                                            "sql" -> "🗄️ "
+                                            "html" -> "🌐 "
+                                            "css" -> "🎨 "
+                                            "md" -> "📝 "
+                                            "env" -> "🔑 "
+                                            else -> "📄 "
+                                        },
+                                        fontSize = 14.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = displayName,
+                                        color = if (isSelected) DiscordBlurple else DiscordTextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                                if (isSelected) {
+                                    Text(
+                                        text = "✓",
+                                        color = DiscordGreen,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLanguageSelectorDialog = false }) {
+                    Text("Close", color = DiscordBlurple)
+                }
             }
         )
     }

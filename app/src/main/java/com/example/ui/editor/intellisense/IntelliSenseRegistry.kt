@@ -593,6 +593,341 @@ object IntelliSenseRegistry {
         )
     )
 
+    val TYPESCRIPT_ITEMS = listOf(
+        CompletionItem(
+            label = "ChatInputCommandInteraction",
+            insertText = "interaction: ChatInputCommandInteraction",
+            kind = CompletionKind.INTERFACE,
+            detail = "import { ChatInputCommandInteraction } from 'discord.js'",
+            documentation = "TypeScript type for slash command interaction callback parameter.",
+            category = "TypeScript"
+        ),
+        CompletionItem(
+            label = "ButtonInteraction",
+            insertText = "interaction: ButtonInteraction",
+            kind = CompletionKind.INTERFACE,
+            detail = "import { ButtonInteraction } from 'discord.js'",
+            documentation = "TypeScript type for button component interaction callback parameter.",
+            category = "TypeScript"
+        ),
+        CompletionItem(
+            label = "interface BotCommand",
+            insertText = "export interface BotCommand {\n  data: SlashCommandBuilder;\n  execute(interaction: ChatInputCommandInteraction): Promise<void>;\n}",
+            kind = CompletionKind.INTERFACE,
+            detail = "Standard Discord bot command structure interface",
+            documentation = "TypeScript contract for modular slash command files.",
+            category = "TypeScript"
+        ),
+        CompletionItem(
+            label = "type SlashCommandExecute",
+            insertText = "type SlashCommandExecute = (interaction: ChatInputCommandInteraction) => Promise<void>;",
+            kind = CompletionKind.INTERFACE,
+            detail = "Command execution function type alias",
+            documentation = "Defines signature for slash command executor functions.",
+            category = "TypeScript"
+        ),
+        CompletionItem(
+            label = "Client<true>",
+            insertText = "client: Client<true>",
+            kind = CompletionKind.CLASS,
+            detail = "Logged-in ready Discord client instance type",
+            documentation = "Ensures client.user is non-null after 'ready' event.",
+            category = "TypeScript"
+        )
+    )
+
+    val JSON_ITEMS = listOf(
+        CompletionItem(
+            label = "\"scripts\": { ... }",
+            insertText = "\"scripts\": {\n  \"start\": \"node index.js\",\n  \"dev\": \"nodemon index.js\"\n}",
+            kind = CompletionKind.SNIPPET,
+            detail = "package.json npm script commands",
+            documentation = "Defines startup and developer execution commands.",
+            category = "JSON"
+        ),
+        CompletionItem(
+            label = "\"dependencies\": { ... }",
+            insertText = "\"dependencies\": {\n  \"discord.js\": \"^14.16.0\",\n  \"dotenv\": \"^16.4.5\"\n}",
+            kind = CompletionKind.SNIPPET,
+            detail = "package.json production dependencies block",
+            documentation = "Declares discord.js and dotenv packages.",
+            category = "JSON"
+        ),
+        CompletionItem(
+            label = "\"token\": \"...\"",
+            insertText = "\"token\": \"YOUR_DISCORD_BOT_TOKEN\",",
+            kind = CompletionKind.PROPERTY,
+            detail = "Bot configuration token property",
+            documentation = "Discord bot secret gateway authorization token.",
+            category = "Config"
+        ),
+        CompletionItem(
+            label = "\"clientId\": \"...\"",
+            insertText = "\"clientId\": \"YOUR_APPLICATION_ID\",",
+            kind = CompletionKind.PROPERTY,
+            detail = "Discord Application / Client ID",
+            documentation = "18-19 digit Discord application identifier.",
+            category = "Config"
+        ),
+        CompletionItem(
+            label = "\"prefix\": \"!\"",
+            insertText = "\"prefix\": \"!\",",
+            kind = CompletionKind.PROPERTY,
+            detail = "Bot text command prefix",
+            documentation = "Default prefix character for chat-based bot commands.",
+            category = "Config"
+        )
+    )
+
+    val MARKDOWN_ITEMS = listOf(
+        CompletionItem(
+            label = "# Project Title",
+            insertText = "# 🤖 Discord Bot\n\nA modern, feature-rich bot built with BotStudio.\n\n## 🚀 Features\n- Slash commands\n- Embed builder\n\n## 🛠 Setup\n```bash\nnpm install\nnpm start\n```",
+            kind = CompletionKind.SNIPPET,
+            detail = "Complete README.md starter template",
+            documentation = "Professional README template with setup and command docs.",
+            category = "Markdown"
+        ),
+        CompletionItem(
+            label = "```js Code Block",
+            insertText = "```javascript\n$1\n```",
+            kind = CompletionKind.SNIPPET,
+            detail = "Fenced JavaScript code block",
+            documentation = "Renders formatted syntax-highlighted code in Discord or GitHub.",
+            category = "Markdown"
+        ),
+        CompletionItem(
+            label = "| Table Template |",
+            insertText = "| Command | Description | Permission |\n| :--- | :--- | :--- |\n| `/ping` | Check latency | Everyone |\n| `/clear` | Purge chat | Admin |",
+            kind = CompletionKind.SNIPPET,
+            detail = "Markdown documentation table",
+            documentation = "Structured table for bot commands and arguments.",
+            category = "Markdown"
+        )
+    )
+
+    val HTML_CSS_ITEMS = listOf(
+        CompletionItem(
+            label = "<!DOCTYPE html>",
+            insertText = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>Bot Status Dashboard</title>\n  <style>\n    body { font-family: sans-serif; background: #2B2D31; color: white; margin: 0; padding: 20px; }\n  </style>\n</head>\n<body>\n  <h1>🤖 Bot Status: Online</h1>\n</body>\n</html>",
+            kind = CompletionKind.SNIPPET,
+            detail = "HTML5 Bot Dashboard Starter",
+            documentation = "Complete dark-mode web status dashboard page.",
+            category = "HTML"
+        ),
+        CompletionItem(
+            label = "display: flex;",
+            insertText = "display: flex;\njustify-content: center;\nalign-items: center;",
+            kind = CompletionKind.PROPERTY,
+            detail = "CSS Flexbox centering layout",
+            documentation = "Standard responsive flexbox layout container.",
+            category = "CSS"
+        ),
+        CompletionItem(
+            label = "background: #5865F2",
+            insertText = "background-color: #5865F2;\ncolor: #FFFFFF;\nborder-radius: 6px;",
+            kind = CompletionKind.PROPERTY,
+            detail = "Discord Blurple theme styling",
+            documentation = "Authentic Discord branding colors for buttons and cards.",
+            category = "CSS"
+        )
+    )
+
+    val SHELL_ITEMS = listOf(
+        CompletionItem(
+            label = "npm install discord.js",
+            insertText = "npm install discord.js dotenv",
+            kind = CompletionKind.SNIPPET,
+            detail = "Install discord.js v14 via npm",
+            documentation = "Installs Discord API SDK and dotenv environment manager.",
+            category = "Shell"
+        ),
+        CompletionItem(
+            label = "pip install discord.py",
+            insertText = "pip install discord.py python-dotenv aiohttp",
+            kind = CompletionKind.SNIPPET,
+            detail = "Install discord.py via pip",
+            documentation = "Installs discord.py async engine and dependencies.",
+            category = "Shell"
+        ),
+        CompletionItem(
+            label = "export DISCORD_TOKEN=",
+            insertText = "export DISCORD_TOKEN=\"\$1\"",
+            kind = CompletionKind.SNIPPET,
+            detail = "Export environment variable in terminal",
+            documentation = "Sets bot token in current shell session.",
+            category = "Shell"
+        )
+    )
+
+    val SQL_ITEMS = listOf(
+        CompletionItem(
+            label = "CREATE TABLE IF NOT EXISTS",
+            insertText = "CREATE TABLE IF NOT EXISTS users (\n  user_id VARCHAR(32) PRIMARY KEY,\n  points INT DEFAULT 0,\n  level INT DEFAULT 1,\n  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+            kind = CompletionKind.SNIPPET,
+            detail = "Create bot economy / profile table",
+            documentation = "Standard schema for per-user Discord database records.",
+            category = "SQL"
+        ),
+        CompletionItem(
+            label = "SELECT * FROM users WHERE",
+            insertText = "SELECT * FROM users WHERE user_id = $1 LIMIT 1;",
+            kind = CompletionKind.SNIPPET,
+            detail = "Query single user record",
+            documentation = "Fetches saved user points and inventory data.",
+            category = "SQL"
+        ),
+        CompletionItem(
+            label = "INSERT INTO users VALUES",
+            insertText = "INSERT INTO users (user_id, points) VALUES ($1, $2)\nON CONFLICT(user_id) DO UPDATE SET points = points + excluded.points;",
+            kind = CompletionKind.SNIPPET,
+            detail = "Upsert user balance or points",
+            documentation = "Atomic insert or update for bot points.",
+            category = "SQL"
+        )
+    )
+
+    val KOTLIN_ITEMS = listOf(
+        CompletionItem(
+            label = "fun main()",
+            insertText = "fun main() {\n    println(\"🤖 Bot started\")\n}",
+            kind = CompletionKind.SNIPPET,
+            detail = "Standard Kotlin main entry point",
+            documentation = "Kotlin application main entry point.",
+            category = "Kotlin"
+        ),
+        CompletionItem(
+            label = "data class BotConfig",
+            insertText = "data class BotConfig(\n    val token: String,\n    val prefix: String = \"!\",\n    val ownerId: Long = 0L\n)",
+            kind = CompletionKind.CLASS,
+            detail = "Data class for bot configuration",
+            documentation = "Immutable configuration holder data class.",
+            category = "Kotlin"
+        ),
+        CompletionItem(
+            label = "suspend fun handleCommand",
+            insertText = "suspend fun handleCommand(command: String, args: List<String>) {\n    when (command) {\n        \"ping\" -> println(\"Pong!\")\n        else -> println(\"Unknown command\")\n    }\n}",
+            kind = CompletionKind.METHOD,
+            detail = "Coroutine command handler function",
+            documentation = "Asynchronous suspend function for routing bot commands.",
+            category = "Kotlin"
+        ),
+        CompletionItem(
+            label = "val kord = Kord(token)",
+            insertText = "val kord = Kord(System.getenv(\"DISCORD_TOKEN\") ?: \"\")",
+            kind = CompletionKind.SNIPPET,
+            detail = "Initialize Kord Discord client",
+            documentation = "Initializes idiomatic Kotlin Discord client (Kord).",
+            category = "Kotlin"
+        ),
+        CompletionItem(
+            label = "kord.on<MessageCreateEvent>",
+            insertText = "kord.on<MessageCreateEvent> {\n    if (message.author?.isBot == true) return@on\n    if (message.content == \"!ping\") {\n        message.respond(\"🏓 Pong!\")\n    }\n}",
+            kind = CompletionKind.EVENT,
+            detail = "Kord event listener for messages",
+            documentation = "Listens for message creation events in Kord.",
+            category = "Kotlin"
+        )
+    )
+
+    val LUA_ITEMS = listOf(
+        CompletionItem(
+            label = "local discordia = require('discordia')",
+            insertText = "local discordia = require('discordia')\nlocal client = discordia.Client()",
+            kind = CompletionKind.SNIPPET,
+            detail = "Discordia Discord Bot Setup (Lua)",
+            documentation = "Initializes the Discordia client in Lua.",
+            category = "Lua"
+        ),
+        CompletionItem(
+            label = "client:on('ready', function() ... end)",
+            insertText = "client:on('ready', function()\n    print('🤖 Bot is ready as ' .. client.user.username)\nend)",
+            kind = CompletionKind.EVENT,
+            detail = "Discordia ready event handler",
+            documentation = "Executes when the Lua bot successfully authenticates.",
+            category = "Lua"
+        ),
+        CompletionItem(
+            label = "client:on('messageCreate', function(message) ... end)",
+            insertText = "client:on('messageCreate', function(message)\n    if message.author.bot then return end\n    if message.content == '!ping' then\n        message:reply('🏓 Pong!')\n    end\nend)",
+            kind = CompletionKind.EVENT,
+            detail = "Discordia message event handler",
+            documentation = "Listens for incoming messages in Lua.",
+            category = "Lua"
+        ),
+        CompletionItem(
+            label = "message:reply('...')",
+            insertText = "message:reply('$1')",
+            kind = CompletionKind.METHOD,
+            detail = "message:reply(content: string)",
+            documentation = "Sends a reply to a message in Discordia.",
+            category = "Lua"
+        ),
+        CompletionItem(
+            label = "client:run('Bot ...')",
+            insertText = "client:run('Bot ' .. (os.getenv('DISCORD_TOKEN') or ''))",
+            kind = CompletionKind.METHOD,
+            detail = "client:run(token: string)",
+            documentation = "Connects the Discordia client to Discord gateway.",
+            category = "Lua"
+        )
+    )
+
+    val ENV_ITEMS = listOf(
+        CompletionItem(
+            label = "DISCORD_TOKEN=",
+            insertText = "DISCORD_TOKEN=your_bot_token_here",
+            kind = CompletionKind.PROPERTY,
+            detail = "Discord Bot Authentication Token",
+            documentation = "Secret bot token from Discord Developer Portal.",
+            category = "Env"
+        ),
+        CompletionItem(
+            label = "CLIENT_ID=",
+            insertText = "CLIENT_ID=123456789012345678",
+            kind = CompletionKind.PROPERTY,
+            detail = "Discord Application ID",
+            documentation = "Application / client ID used for slash command registration.",
+            category = "Env"
+        ),
+        CompletionItem(
+            label = "GUILD_ID=",
+            insertText = "GUILD_ID=123456789012345678",
+            kind = CompletionKind.PROPERTY,
+            detail = "Development Server / Guild ID",
+            documentation = "Server ID for instant testing of guild slash commands.",
+            category = "Env"
+        ),
+        CompletionItem(
+            label = "PREFIX=",
+            insertText = "PREFIX=!",
+            kind = CompletionKind.PROPERTY,
+            detail = "Message command prefix",
+            documentation = "Default prefix character for message commands.",
+            category = "Env"
+        )
+    )
+
+    /**
+     * Resolves completion catalog matching the file type and language.
+     */
+    fun getItemsForFile(filePath: String): List<CompletionItem> {
+        val lower = filePath.lowercase()
+        return when {
+            lower.endsWith(".py") -> DISCORD_PY_ITEMS
+            lower.endsWith(".ts") || lower.endsWith(".tsx") -> TYPESCRIPT_ITEMS + DISCORD_JS_ITEMS
+            lower.endsWith(".json") -> JSON_ITEMS
+            lower.endsWith(".kt") || lower.endsWith(".kts") -> KOTLIN_ITEMS
+            lower.endsWith(".lua") -> LUA_ITEMS
+            lower.endsWith(".env") || lower.endsWith(".properties") -> ENV_ITEMS
+            lower.endsWith(".md") || lower.endsWith(".markdown") -> MARKDOWN_ITEMS
+            lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".css") -> HTML_CSS_ITEMS
+            lower.endsWith(".sh") || lower.endsWith(".bash") -> SHELL_ITEMS
+            lower.endsWith(".sql") -> SQL_ITEMS
+            else -> DISCORD_JS_ITEMS
+        }
+    }
+
     val SIGNATURE_HELPS = mapOf(
         "reply" to SignatureHelp(
             functionName = "interaction.reply",
