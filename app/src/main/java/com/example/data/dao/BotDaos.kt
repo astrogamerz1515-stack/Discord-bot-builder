@@ -17,6 +17,9 @@ interface BotProjectDao {
     @Query("SELECT * FROM bot_projects ORDER BY updatedAt DESC")
     fun getAllProjects(): Flow<List<BotProject>>
 
+    @Query("SELECT * FROM bot_projects ORDER BY updatedAt DESC")
+    suspend fun getAllProjectsList(): List<BotProject>
+
     @Query("SELECT * FROM bot_projects WHERE id = :id")
     suspend fun getProjectById(id: Long): BotProject?
 

@@ -46,6 +46,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
@@ -1214,7 +1216,7 @@ fun VisualBuilderTopBar(
                     modifier = Modifier.size(34.dp)
                 ) {
                     Icon(
-                        Icons.Default.Undo,
+                        Icons.AutoMirrored.Filled.Undo,
                         contentDescription = "Undo",
                         tint = if (canUndo) VisualBuilderThemeColors.OnBackground else VisualBuilderThemeColors.Border,
                         modifier = Modifier.size(17.dp)
@@ -1228,7 +1230,7 @@ fun VisualBuilderTopBar(
                     modifier = Modifier.size(34.dp)
                 ) {
                     Icon(
-                        Icons.Default.Redo,
+                        Icons.AutoMirrored.Filled.Redo,
                         contentDescription = "Redo",
                         tint = if (canRedo) VisualBuilderThemeColors.OnBackground else VisualBuilderThemeColors.Border,
                         modifier = Modifier.size(17.dp)

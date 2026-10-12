@@ -18,16 +18,67 @@ import com.example.ui.theme.SyntaxString
 import com.example.ui.theme.SyntaxType
 
 class SyntaxHighlightTransformation(
-    private val filePath: String
+    private val filePath: String,
+    private val ghostText: String? = null,
+    private val ghostOffset: Int = -1
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
         return try {
             val highlighted = SyntaxHighlighter.highlight(raw, filePath)
-            TransformedText(
-                text = highlighted,
-                offsetMapping = OffsetMapping.Identity
-            )
+            val cleanGhost = ghostText?.takeIf { it.isNotEmpty() }
+            if (cleanGhost == null || ghostOffset < 0 || ghostOffset > raw.length) {
+                TransformedText(
+                    text = highlighted,
+                    offsetMapping = OffsetMapping.Identity
+                )
+            } else {
+                val builder = AnnotatedString.Builder()
+                if (ghostOffset > 0) {
+                    builder.append(highlighted.subSequence(0, ghostOffset))
+                }
+                val ghostStart = builder.length
+                builder.append(cleanGhost)
+                val ghostEnd = builder.length
+                builder.addStyle(
+                    style = SpanStyle(
+                        color = Color(0xFF80848E).copy(alpha = 0.65f),
+                        fontStyle = FontStyle.Italic
+                    ),
+                    start = ghostStart,
+                    end = ghostEnd
+                )
+                if (ghostOffset < raw.length) {
+                    builder.append(highlighted.subSequence(ghostOffset, raw.length))
+                }
+                val combinedText = builder.toAnnotatedString()
+                val ghostLen = cleanGhost.length
+
+                val offsetMapping = object : OffsetMapping {
+                    override fun originalToTransformed(offset: Int): Int {
+                        return if (offset <= ghostOffset) {
+                            offset
+                        } else {
+                            (offset + ghostLen).coerceIn(0, combinedText.length)
+                        }
+                    }
+
+                    override fun transformedToOriginal(offset: Int): Int {
+                        return if (offset <= ghostOffset) {
+                            offset
+                        } else if (offset <= ghostOffset + ghostLen) {
+                            ghostOffset
+                        } else {
+                            (offset - ghostLen).coerceIn(0, raw.length)
+                        }
+                    }
+                }
+
+                TransformedText(
+                    text = combinedText,
+                    offsetMapping = offsetMapping
+                )
+            }
         } catch (_: Throwable) {
             TransformedText(
                 text = text,

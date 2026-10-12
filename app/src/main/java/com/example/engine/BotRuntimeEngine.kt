@@ -266,14 +266,22 @@ class BotRuntimeEngine(
      * Starts the bot. If real token is present, initiates the real Discord Gateway v10 WebSocket.
      */
     fun startBot(project: BotProject) {
-        if (_isRunning.value) return
+        val cleanToken = sanitizeToken(project.botToken)
+        val hasRealToken = isRealToken(cleanToken)
+
+        if (_isRunning.value && currentProjectId == project.id) {
+            if (hasRealToken && !_isRealDiscordConnected.value) {
+                scope.launch(Dispatchers.IO) {
+                    connectRealDiscordGateway(project, isResumeAttempt = sessionId != null)
+                }
+            }
+            return
+        }
+
         currentProjectId = project.id
         activeProject = project
         _runningProjectId.value = project.id
         _isRunning.value = true
-
-        val cleanToken = sanitizeToken(project.botToken)
-        val hasRealToken = isRealToken(cleanToken)
 
         scope.launch(Dispatchers.IO) {
             // Pre-cache files in memory for fast zero-latency command parsing
@@ -729,95 +737,103 @@ class BotRuntimeEngine(
     }
 
     private suspend fun handleIncomingRealMessage(d: JSONObject, project: BotProject) {
-        val content = d.optString("content", "")
-        val channelId = d.optString("channel_id", "")
-        val messageId = d.optString("id", "")
-        val author = d.optJSONObject("author") ?: return
-        val authorUsername = author.optString("username", "Unknown")
-        val authorId = author.optString("id", "")
-        val isBot = author.optBoolean("bot", false)
+        try {
+            val content = d.optString("content", "")
+            val channelId = d.optString("channel_id", "")
+            val messageId = d.optString("id", "")
+            val author = d.optJSONObject("author") ?: return
+            val authorUsername = author.optString("username", "Unknown")
+            val authorId = author.optString("id", "")
+            val isBot = author.optBoolean("bot", false)
 
-        if (isBot) return
+            if (isBot) return
 
-        // Log asynchronously in background so message processing starts immediately
-        logAsync(
-            project.id,
-            "📥 [REAL DISCORD MSG] #$channelId @$authorUsername: '$content'",
-            "STDOUT"
-        )
-
-        // Mirror to in-app simulator
-        val mirrorMsg = DiscordSimulatorMessage(
-            authorName = "$authorUsername (Real Discord)",
-            isBot = false,
-            content = content
-        )
-        _simulatorMessages.value = _simulatorMessages.value + mirrorMsg
-
-        // Fast in-memory cached files (avoids repeated SQLite disk reads on every message)
-        val files = if (cachedProjectId == project.id && cachedFiles != null) {
-            cachedFiles!!
-        } else {
-            val direct = repository.getFilesDirect(project.id)
-            cachedFiles = direct
-            cachedProjectId = project.id
-            direct
-        }
-
-        // Execute user code (<1ms with O(1) indexed lookup)
-        val result = BotCodeExecutor.executeIncomingMessage(
-            messageContent = content,
-            authorUsername = authorUsername,
-            authorId = authorId,
-            project = project,
-            files = files,
-            gatewayPingMs = _gatewayPingMs.value
-        )
-
-        if (result.isHandled) {
-            if (result.executionLog.isNotBlank()) {
-                logAsync(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
-            }
-            sendRealDiscordMessage(
-                channelId = channelId,
-                messageReferenceId = messageId,
-                result = result,
-                project = project
+            // Log asynchronously in background so message processing starts immediately
+            logAsync(
+                project.id,
+                "📥 [REAL DISCORD MSG] #$channelId @$authorUsername: '$content'",
+                "STDOUT"
             )
+
+            // Mirror to in-app simulator
+            val mirrorMsg = DiscordSimulatorMessage(
+                authorName = "$authorUsername (Real Discord)",
+                isBot = false,
+                content = content
+            )
+            _simulatorMessages.value = _simulatorMessages.value + mirrorMsg
+
+            // Fast in-memory cached files (avoids repeated SQLite disk reads on every message)
+            val files = if (cachedProjectId == project.id && cachedFiles != null) {
+                cachedFiles!!
+            } else {
+                val direct = repository.getFilesDirect(project.id)
+                cachedFiles = direct
+                cachedProjectId = project.id
+                direct
+            }
+
+            // Execute user code (<1ms with O(1) indexed lookup)
+            val result = BotCodeExecutor.executeIncomingMessage(
+                messageContent = content,
+                authorUsername = authorUsername,
+                authorId = authorId,
+                project = project,
+                files = files,
+                gatewayPingMs = _gatewayPingMs.value
+            )
+
+            if (result.isHandled) {
+                if (result.executionLog.isNotBlank()) {
+                    logAsync(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
+                }
+                sendRealDiscordMessage(
+                    channelId = channelId,
+                    messageReferenceId = messageId,
+                    result = result,
+                    project = project
+                )
+            }
+        } catch (e: Exception) {
+            logAsync(project.id, "⚠️ [MESSAGE HANDLER ERROR] ${e.localizedMessage ?: "Safe recovery"}", "WARN")
         }
     }
 
     private suspend fun handleIncomingRealInteraction(d: JSONObject, project: BotProject) {
-        val interactionId = d.optString("id", "")
-        val interactionToken = d.optString("token", "")
-        val data = d.optJSONObject("data")
-        val cmdName = data?.optString("name", "") ?: ""
-        val member = d.optJSONObject("member")
-        val user = member?.optJSONObject("user") ?: d.optJSONObject("user")
-        val username = user?.optString("username", "Developer") ?: "Developer"
+        try {
+            val interactionId = d.optString("id", "")
+            val interactionToken = d.optString("token", "")
+            val data = d.optJSONObject("data")
+            val cmdName = data?.optString("name", "") ?: ""
+            val member = d.optJSONObject("member")
+            val user = member?.optJSONObject("user") ?: d.optJSONObject("user")
+            val username = user?.optString("username", "Developer") ?: "Developer"
 
-        logAsync(project.id, "⚡ [INTERACTION] Slash command /$cmdName invoked by @$username", "STDOUT")
+            logAsync(project.id, "⚡ [INTERACTION] Slash command /$cmdName invoked by @$username", "STDOUT")
 
-        val files = if (cachedProjectId == project.id && cachedFiles != null) {
-            cachedFiles!!
-        } else {
-            val direct = repository.getFilesDirect(project.id)
-            cachedFiles = direct
-            cachedProjectId = project.id
-            direct
-        }
+            val files = if (cachedProjectId == project.id && cachedFiles != null) {
+                cachedFiles!!
+            } else {
+                val direct = repository.getFilesDirect(project.id)
+                cachedFiles = direct
+                cachedProjectId = project.id
+                direct
+            }
 
-        val result = BotCodeExecutor.executeIncomingMessage(
-            messageContent = "/$cmdName",
-            authorUsername = username,
-            authorId = user?.optString("id", "") ?: "",
-            project = project,
-            files = files,
-            gatewayPingMs = _gatewayPingMs.value
-        )
+            val result = BotCodeExecutor.executeIncomingMessage(
+                messageContent = "/$cmdName",
+                authorUsername = username,
+                authorId = user?.optString("id", "") ?: "",
+                project = project,
+                files = files,
+                gatewayPingMs = _gatewayPingMs.value
+            )
 
-        if (result.isHandled) {
-            respondToRealDiscordInteraction(interactionId, interactionToken, result, project)
+            if (result.isHandled) {
+                respondToRealDiscordInteraction(interactionId, interactionToken, result, project)
+            }
+        } catch (e: Exception) {
+            logAsync(project.id, "⚠️ [INTERACTION ERROR] ${e.localizedMessage ?: "Safe recovery"}", "WARN")
         }
     }
 

@@ -21,6 +21,8 @@ class BotRepository(
 ) {
     val allProjects: Flow<List<BotProject>> = projectDao.getAllProjects()
 
+    suspend fun getAllProjectsSync(): List<BotProject> = projectDao.getAllProjectsList()
+
     fun getProject(id: Long): Flow<BotProject?> = projectDao.observeProjectById(id)
 
     suspend fun getProjectSync(id: Long): BotProject? = projectDao.getProjectById(id)

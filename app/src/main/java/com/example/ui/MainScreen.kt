@@ -128,8 +128,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+            .statusBarsPadding(),
         containerColor = DiscordBackground,
         topBar = {
             // Top App Bar
@@ -371,7 +370,7 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                 AppTab.BOT_CONFIG
             )
             NavigationBar(
-                containerColor = DiscordDarker,
+                containerColor = DiscordSurface,
                 tonalElevation = 0.dp,
                 modifier = Modifier.testTag("bottom_nav_bar")
             ) {

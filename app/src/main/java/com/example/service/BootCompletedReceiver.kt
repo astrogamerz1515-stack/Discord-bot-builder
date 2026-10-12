@@ -12,19 +12,27 @@ import android.content.Intent
  */
 class BootCompletedReceiver : BroadcastReceiver() {
 
+    companion object {
+        const val ACTION_WATCHDOG_KEEP_ALIVE = "com.example.service.ACTION_WATCHDOG_KEEP_ALIVE"
+    }
+
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
         if (action == Intent.ACTION_BOOT_COMPLETED ||
             action == Intent.ACTION_MY_PACKAGE_REPLACED ||
             action == "android.intent.action.QUICKBOOT_POWERON" ||
-            action == "com.htc.intent.action.QUICKBOOT_POWERON"
+            action == "com.htc.intent.action.QUICKBOOT_POWERON" ||
+            action == ACTION_WATCHDOG_KEEP_ALIVE
         ) {
             val prefs = BotBackgroundService.getPrefs(context)
             val wasRunning = prefs.getBoolean(BotBackgroundService.PREF_IS_RUNNING, false)
-            val projectId = prefs.getLong(BotBackgroundService.PREF_PROJECT_ID, 0L)
-            val botName = prefs.getString(BotBackgroundService.PREF_BOT_NAME, "Discord Bot") ?: "Discord Bot"
+            val intentProjectId = intent.getLongExtra(BotBackgroundService.EXTRA_PROJECT_ID, 0L)
+            val projectId = if (intentProjectId > 0) intentProjectId else prefs.getLong(BotBackgroundService.PREF_PROJECT_ID, 0L)
+            val botName = intent.getStringExtra(BotBackgroundService.EXTRA_BOT_NAME)
+                ?: prefs.getString(BotBackgroundService.PREF_BOT_NAME, "Discord Bot")
+                ?: "Discord Bot"
 
-            if (wasRunning && projectId > 0) {
+            if (wasRunning) {
                 BotBackgroundService.start(context, projectId, botName)
             }
         }

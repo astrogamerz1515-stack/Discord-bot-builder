@@ -195,6 +195,15 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                         projects.first()
                     }
                     selectProject(target)
+                    if (isMarkedRunning) {
+                        if (!runtimeEngine.isRunning.value) {
+                            startBotProcess()
+                        } else {
+                            try {
+                                com.example.service.BotBackgroundService.start(application, target.id, target.name)
+                            } catch (_: Exception) {}
+                        }
+                    }
                 }
             }
         }

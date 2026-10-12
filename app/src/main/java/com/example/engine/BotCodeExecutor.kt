@@ -25,27 +25,27 @@ object BotCodeExecutor {
 
     // Precompiled Static Regex Patterns to avoid per-message compilation overhead
     private val EXACT_MATCH_REGEX = Regex(
-        """(?:message|msg)\.content\s*===?\s*['"`]([^'"`]+)['"`][^{};]*\{?([^}]+)\}?""",
-        RegexOption.IGNORE_CASE
+        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\s*===?\s*['"`]([^'"`]+)['"`][^{};]*\{?([^}]+)\}?""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val STARTS_WITH_REGEX = Regex(
-        """(?:message|msg)\.content\.startsWith\(\s*['"`]([^'"`]+)['"`]\s*\)[^{};]*\{?([^}]+)\}?""",
-        RegexOption.IGNORE_CASE
+        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.startsWith\(\s*['"`]([^'"`]+)['"`]\s*\)[^{};]*\{?([^}]+)\}?""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val COMMAND_MATCH_REGEX = Regex(
         """(?:command|commandName|cmd)\s*===?\s*['"`]([a-zA-Z0-9_\-]+)['"`][^{};]*\{?([^}]+)\}?""",
-        RegexOption.IGNORE_CASE
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val SWITCH_CASE_REGEX = Regex(
         """case\s*['"`]([a-zA-Z0-9_\-]+)['"`]\s*:\s*([^;]+(?:;|\s*break;))""",
-        RegexOption.IGNORE_CASE
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val PYTHON_COMMAND_REGEX = Regex(
         """@(?:bot|client)\.command\([^)]*\)\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\([^)]*\):(?:\s*\n|\s+)+([^@\n]+await\s+ctx\.send\([^)]+\))""",
-        RegexOption.IGNORE_CASE
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val SIMPLE_SEND_REGEX = Regex(
-        """(?:message|msg|channel|interaction)\.(?:reply|send)\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+        """(?:await\s+)?(?:message|msg|channel|interaction)(?:\.channel)?\.(?:reply|send)\(\s*['"`]([^'"`]+)['"`]\s*\)""",
         RegexOption.IGNORE_CASE
     )
     private val OBJECT_SEND_REGEX = Regex(
@@ -53,11 +53,11 @@ object BotCodeExecutor {
         RegexOption.IGNORE_CASE
     )
     private val TEMPLATE_SEND_REGEX = Regex(
-        """(?:reply|send)\(\s*`([^`]+)`\s*\)""",
+        """(?:await\s+)?(?:message|msg|channel|interaction)(?:\.channel)?\.(?:reply|send)\(\s*`([^`]+)`\s*\)""",
         RegexOption.IGNORE_CASE
     )
     private val PYTHON_SEND_REGEX = Regex(
-        """ctx\.send\(\s*(?:f?['"`]([^'"`]+)['"`]|([^)]+))\s*\)""",
+        """(?:await\s+)?(?:ctx|message\.channel)\.send\(\s*(?:f?['"`]([^'"`]+)['"`]|([^)]+))\s*\)""",
         RegexOption.IGNORE_CASE
     )
     private val WHITESPACE_REGEX = Regex("\\s+")
@@ -150,60 +150,67 @@ object BotCodeExecutor {
         files: List<BotFile>,
         gatewayPingMs: Int
     ): BotExecutionResult {
-        val trimmed = messageContent.trim()
-        if (trimmed.isEmpty()) {
-            return BotExecutionResult(isHandled = false)
+        return try {
+            val trimmed = messageContent.trim()
+            if (trimmed.isEmpty()) {
+                return BotExecutionResult(isHandled = false)
+            }
+
+            // Combine code from project files (giving priority to entrypoint index.js / bot.py)
+            val sortedFiles = files.sortedByDescending { it.isEntrypoint }
+            val allCode = sortedFiles.joinToString("\n\n") { it.content }
+
+            val prefix = project.prefix.ifEmpty { "!" }
+            val isSlash = trimmed.startsWith("/")
+            val isPrefix = trimmed.startsWith(prefix)
+
+            val cleanCommand = when {
+                isSlash -> trimmed.substring(1).trim()
+                isPrefix -> trimmed.substring(prefix.length).trim()
+                else -> trimmed
+            }
+
+            val parts = cleanCommand.split(WHITESPACE_REGEX)
+            val commandName = parts.firstOrNull()?.lowercase() ?: ""
+            val args = parts.drop(1)
+            val argsJoined = args.joinToString(" ")
+
+            // Fast compiled rules lookup
+            val rules = getOrCompileRules(project.id, allCode)
+
+            // 1. Check for exact code-defined triggers in user's source code
+            val customCodeResult = evaluateCustomCodeTriggers(
+                trimmedContent = trimmed,
+                cleanCommand = cleanCommand,
+                commandName = commandName,
+                args = args,
+                argsJoined = argsJoined,
+                authorUsername = authorUsername,
+                authorId = authorId,
+                rules = rules,
+                pingMs = gatewayPingMs,
+                project = project
+            )
+
+            if (customCodeResult != null && customCodeResult.isHandled) {
+                return customCodeResult
+            }
+
+            // 2. Check for standard commands or template behaviors (e.g. ping, help, embed, roll, userinfo, ai)
+            evaluateBuiltInCommands(
+                commandName = commandName,
+                argsJoined = argsJoined,
+                authorUsername = authorUsername,
+                project = project,
+                pingMs = gatewayPingMs,
+                isSlashOrPrefix = isSlash || isPrefix
+            )
+        } catch (t: Throwable) {
+            BotExecutionResult(
+                isHandled = false,
+                executionLog = "⚠️ [CODE EXECUTION ERROR] ${t.localizedMessage ?: "User code exception handled safely"}"
+            )
         }
-
-        // Combine code from project files (giving priority to entrypoint index.js / bot.py)
-        val sortedFiles = files.sortedByDescending { it.isEntrypoint }
-        val allCode = sortedFiles.joinToString("\n\n") { it.content }
-
-        val prefix = project.prefix.ifEmpty { "!" }
-        val isSlash = trimmed.startsWith("/")
-        val isPrefix = trimmed.startsWith(prefix)
-
-        val cleanCommand = when {
-            isSlash -> trimmed.substring(1).trim()
-            isPrefix -> trimmed.substring(prefix.length).trim()
-            else -> trimmed
-        }
-
-        val parts = cleanCommand.split(WHITESPACE_REGEX)
-        val commandName = parts.firstOrNull()?.lowercase() ?: ""
-        val args = parts.drop(1)
-        val argsJoined = args.joinToString(" ")
-
-        // Fast compiled rules lookup
-        val rules = getOrCompileRules(project.id, allCode)
-
-        // 1. Check for exact code-defined triggers in user's source code
-        val customCodeResult = evaluateCustomCodeTriggers(
-            trimmedContent = trimmed,
-            cleanCommand = cleanCommand,
-            commandName = commandName,
-            args = args,
-            argsJoined = argsJoined,
-            authorUsername = authorUsername,
-            authorId = authorId,
-            rules = rules,
-            pingMs = gatewayPingMs,
-            project = project
-        )
-
-        if (customCodeResult != null && customCodeResult.isHandled) {
-            return customCodeResult
-        }
-
-        // 2. Check for standard commands or template behaviors (e.g. ping, help, embed, roll, userinfo, ai)
-        return evaluateBuiltInCommands(
-            commandName = commandName,
-            argsJoined = argsJoined,
-            authorUsername = authorUsername,
-            project = project,
-            pingMs = gatewayPingMs,
-            isSlashOrPrefix = isSlash || isPrefix
-        )
     }
 
     /**

@@ -37,6 +37,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -47,6 +52,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -115,7 +122,6 @@ import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import com.example.ui.editor.intellisense.InlineSuggestion
-import com.example.ui.editor.intellisense.InlineSuggestionBar
 import com.example.ui.editor.intellisense.InlineSuggestionEngine
 import com.example.ui.editor.intellisense.CompletionItem
 import com.example.ui.editor.intellisense.IntelliSenseBar
@@ -153,12 +159,11 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var showDiagnosticsPanel by remember { mutableStateOf(false) }
     var showIntelliSenseExplorer by remember { mutableStateOf(false) }
     var selectedDocItem by remember { mutableStateOf<CompletionItem?>(null) }
-    var showIntelliSenseBar by remember { mutableStateOf(true) }
-    var showSignatureHelp by remember { mutableStateOf(true) }
+    var showIntelliSenseBar by remember { mutableStateOf(false) }
+    var showSignatureHelp by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showFindReplaceBar by remember { mutableStateOf(false) }
-    var showInlineSuggestionBar by remember { mutableStateOf(true) }
     var inlineDismissedOffset by remember { mutableIntStateOf(-1) }
 
     // Find & Replace Search State
@@ -309,10 +314,25 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         }
     }
 
-    // Fast and stable syntax highlighting transformation (persists across typing for 60fps responsiveness)
-    val syntaxTransformation = remember(effectiveFilePath) {
+    // Compute inline ghost text (single line or first line with ↵ indicator)
+    val ghostTextToDisplay = remember(inlineSuggestion) {
+        val sugg = inlineSuggestion
+        if (sugg == null) null
+        else {
+            if (sugg.completionText.contains('\n')) {
+                sugg.completionText.substringBefore('\n') + " ↵"
+            } else {
+                sugg.completionText
+            }
+        }
+    }
+
+    // Fast and stable syntax highlighting transformation with inline ghost text
+    val syntaxTransformation = remember(effectiveFilePath, ghostTextToDisplay, cursorPosition) {
         SyntaxHighlightTransformation(
-            filePath = effectiveFilePath
+            filePath = effectiveFilePath,
+            ghostText = ghostTextToDisplay,
+            ghostOffset = if (ghostTextToDisplay != null) cursorPosition else -1
         )
     }
 
@@ -672,61 +692,6 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Live Inline Suggestion Quick-Accept Pill
-            if (inlineSuggestion != null) {
-                Surface(
-                    color = DiscordGreen,
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier
-                        .heightIn(min = 32.dp)
-                        .clickable { applyInlineSuggestion(inlineSuggestion) }
-                        .testTag("btn_accept_inline_pill")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "✨ Tab ⇥",
-                            color = Color.Black,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = inlineSuggestion.displayPreview.take(22),
-                            color = Color.Black.copy(alpha = 0.85f),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                // Inline Word Partial Accept
-                if (inlineSuggestion.nextWord.isNotBlank() && inlineSuggestion.nextWord != inlineSuggestion.completionText) {
-                    Surface(
-                        color = DiscordElevated,
-                        shape = RoundedCornerShape(4.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
-                        modifier = Modifier
-                            .heightIn(min = 32.dp)
-                            .clickable { applyInlineWord(inlineSuggestion) }
-                            .testTag("btn_accept_inline_word_pill")
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                            Text(
-                                text = "Word ▶",
-                                color = DiscordTextPrimary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-            }
-
             // Undo Button
             Surface(
                 color = if (undoStack.isNotEmpty()) DiscordElevated else DiscordDarker,
@@ -739,7 +704,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                     Icon(
-                        imageVector = Icons.Default.Undo,
+                        imageVector = Icons.AutoMirrored.Filled.Undo,
                         contentDescription = "Undo",
                         tint = if (undoStack.isNotEmpty()) DiscordTextPrimary else DiscordTextMuted,
                         modifier = Modifier.size(15.dp)
@@ -759,7 +724,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                     Icon(
-                        imageVector = Icons.Default.Redo,
+                        imageVector = Icons.AutoMirrored.Filled.Redo,
                         contentDescription = "Redo",
                         tint = if (redoStack.isNotEmpty()) DiscordTextPrimary else DiscordTextMuted,
                         modifier = Modifier.size(15.dp)
@@ -1212,15 +1177,6 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        // Live Inline Suggestion Banner
-        if (showInlineSuggestionBar && inlineSuggestion != null) {
-            InlineSuggestionBar(
-                suggestion = inlineSuggestion,
-                onAccept = { applyInlineSuggestion(inlineSuggestion) },
-                onAcceptWord = { applyInlineWord(inlineSuggestion) },
-                onDismiss = { inlineDismissedOffset = cursorPosition }
-            )
-        }
 
         // Live Signature Help Parameter Hint Bar if typing inside a function call
         if (showSignatureHelp && signatureHelp != null) {
@@ -1246,7 +1202,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(TerminalBg)
+                    .background(DiscordBackground)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -1284,7 +1240,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(TerminalBg)
+                    .background(DiscordBackground)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -1327,6 +1283,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .background(DiscordBackground)
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             do {
@@ -1357,7 +1314,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(TerminalBg)
+                        .background(DiscordBackground)
                         .verticalScroll(scrollState)
                 ) {
                     // Line numbers column with active line highlight and error indicators
@@ -1370,13 +1327,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Box(
                         modifier = Modifier
                             .width(gutterWidth)
-                            .background(DiscordDarker)
+                            .defaultMinSize(minHeight = 600.dp)
+                            .background(DiscordBackground)
                             .border(
                                 width = 0.5.dp,
                                 color = DiscordHover,
                                 shape = RoundedCornerShape(0.dp)
                             )
-                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                            .padding(top = 4.dp, bottom = 4.dp, start = 4.dp, end = 4.dp),
                         contentAlignment = Alignment.TopEnd
                     ) {
                         if (lineCount <= 200) {
@@ -1440,8 +1398,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
+                            .defaultMinSize(minHeight = 600.dp)
                             .horizontalScroll(horizontalScrollState)
-                            .padding(8.dp)
+                            .padding(top = 4.dp, bottom = 4.dp, start = 8.dp, end = 8.dp)
                     ) {
                         BasicTextField(
                             value = textFieldValue,
@@ -1449,8 +1408,6 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 lastEditorText = newValue.text
                                 textFieldValue = newValue
                                 viewModel.updateActiveFileContent(newValue.text)
-                                showIntelliSenseBar = true
-                                showSignatureHelp = true
                             },
                             visualTransformation = syntaxTransformation,
                             textStyle = TextStyle(
@@ -1467,8 +1424,23 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 imeAction = ImeAction.None
                             ),
                             modifier = Modifier
-                                .defaultMinSize(minWidth = 800.dp, minHeight = 600.dp)
+                                .fillMaxWidth()
+                                .widthIn(min = 600.dp)
                                 .focusRequester(focusRequester)
+                                .onKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Tab) {
+                                        val suggestion = inlineSuggestion
+                                        if (suggestion != null) {
+                                            applyInlineSuggestion(suggestion)
+                                            true
+                                        } else {
+                                            insertAtCursor("  ")
+                                            true
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                }
                                 .testTag("code_editor_input")
                         )
                     }
@@ -1497,81 +1469,19 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         }
                     }
                 }
-
-                // Floating Interactive Inline Code Completion Pill directly in the editor view (Click to complete!)
-                if (inlineSuggestion != null) {
-                    Surface(
-                        color = DiscordDarker.copy(alpha = 0.95f),
-                        shape = RoundedCornerShape(20.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DiscordGreen),
-                        shadowElevation = 8.dp,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 12.dp)
-                            .clickable { applyInlineSuggestion(inlineSuggestion) }
-                            .testTag("floating_inline_completion_pill")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = "✨ ${inlineSuggestion.triggerSource}:",
-                                color = DiscordBlurple,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = inlineSuggestion.displayPreview.take(30),
-                                color = DiscordTextPrimary,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                color = DiscordGreen,
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .clickable { applyInlineSuggestion(inlineSuggestion) }
-                            ) {
-                                Text(
-                                    text = "Tap to Complete ↵",
-                                    color = Color.Black,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            IconButton(
-                                onClick = { inlineDismissedOffset = cursorPosition },
-                                modifier = Modifier.size(20.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Dismiss",
-                                    tint = DiscordTextMuted,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
 
-        // Professional IDE Bottom Status Bar
+        // Professional IDE Bottom Status Bar (Ultra-Compact)
         Surface(
-            color = DiscordDarker,
+            color = DiscordSurface,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1720,10 +1630,10 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        // Error Diagnostics Tray at bottom of editor if errors exist or toggled
-        if (diagnostics.isNotEmpty() || showDiagnosticsPanel) {
+        // Error Diagnostics Tray at bottom of editor (only shown when explicitly opened by user)
+        if (showDiagnosticsPanel) {
             Surface(
-                color = DiscordDarker,
+                color = DiscordSurface,
                 shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, if (diagnostics.isNotEmpty()) DiscordRed.copy(alpha = 0.5f) else DiscordHover),
                 modifier = Modifier
