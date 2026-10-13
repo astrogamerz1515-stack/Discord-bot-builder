@@ -66,6 +66,8 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.PlayArrow
@@ -154,6 +156,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     val diagnostics by viewModel.codeDiagnostics.collectAsState()
     val autoSaveEnabled by viewModel.autoSaveEnabled.collectAsState()
     val saveStatus by viewModel.saveStatus.collectAsState()
+    val editorFullscreenMode by viewModel.editorFullscreenMode.collectAsState()
+    val showBottomNavInEditor by viewModel.showBottomNavInEditor.collectAsState()
+    val pm2Processes by com.example.engine.Pm2ProcessManager.processes.collectAsState()
 
     var showFilesSheet by remember { mutableStateOf(false) }
     var showDiagnosticsPanel by remember { mutableStateOf(false) }
@@ -1284,6 +1289,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     .fillMaxWidth()
                     .weight(1f)
                     .background(DiscordBackground)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        focusRequester.requestFocus()
+                        keyboardController?.show()
+                        textFieldValue = textFieldValue.copy(selection = TextRange(textFieldValue.text.length))
+                    }
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             do {
@@ -1314,6 +1327,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
+                        .defaultMinSize(minHeight = 800.dp)
                         .background(DiscordBackground)
                         .verticalScroll(scrollState)
                 ) {
@@ -1327,7 +1341,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Box(
                         modifier = Modifier
                             .width(gutterWidth)
-                            .defaultMinSize(minHeight = 600.dp)
+                            .defaultMinSize(minHeight = 800.dp)
                             .background(DiscordBackground)
                             .border(
                                 width = 0.5.dp,
@@ -1398,7 +1412,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .defaultMinSize(minHeight = 600.dp)
+                            .defaultMinSize(minHeight = 800.dp)
                             .horizontalScroll(horizontalScrollState)
                             .padding(top = 4.dp, bottom = 4.dp, start = 8.dp, end = 8.dp)
                     ) {
@@ -1425,6 +1439,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .defaultMinSize(minHeight = 800.dp)
                                 .widthIn(min = 600.dp)
                                 .focusRequester(focusRequester)
                                 .onKeyEvent { keyEvent ->
@@ -1606,18 +1621,80 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         }
                     }
 
+                    val isPm2Online = pm2Processes.any { it.status == com.example.engine.Pm2Status.ONLINE }
                     Surface(
-                        color = if (diagnostics.isNotEmpty()) DiscordRed.copy(alpha = 0.2f) else DiscordGreen.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(3.dp),
-                        modifier = Modifier.clickable { showDiagnosticsPanel = !showDiagnosticsPanel }
+                        color = if (isPm2Online) DiscordGreen.copy(alpha = 0.2f) else DiscordHover,
+                        shape = RoundedCornerShape(4.dp),
+                        border = if (isPm2Online) androidx.compose.foundation.BorderStroke(0.5.dp, DiscordGreen) else null,
+                        modifier = Modifier
+                            .clickable {
+                                viewModel.runScriptWithPm2()
+                                Toast.makeText(context, "⚡ PM2 24/7 Active! Bot runs continuously even when app is closed.", Toast.LENGTH_SHORT).show()
+                            }
+                            .testTag("btn_pm2_247_toggle")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(if (isPm2Online) DiscordGreen else DiscordTextMuted, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (isPm2Online) "PM2 24/7" else "PM2",
+                                color = if (isPm2Online) DiscordGreen else DiscordTextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Bottom Navigation Bar toggle
+                    Surface(
+                        color = if (showBottomNavInEditor) DiscordBlurple.copy(alpha = 0.2f) else DiscordHover,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier
+                            .clickable { viewModel.toggleBottomNavInEditor() }
+                            .testTag("btn_toggle_bottom_nav")
                     ) {
                         Text(
-                            text = if (diagnostics.isNotEmpty()) "⚠️ ${diagnostics.size} issues" else "✓ 0 issues",
-                            color = if (diagnostics.isNotEmpty()) DiscordRed else DiscordGreen,
+                            text = if (showBottomNavInEditor) "▾ Nav" else "▴ Nav",
+                            color = if (showBottomNavInEditor) DiscordBlurple else DiscordTextSecondary,
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                         )
+                    }
+
+                    // Fullscreen Editor Toggle
+                    Surface(
+                        color = if (editorFullscreenMode) DiscordBlurple else DiscordHover,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier
+                            .clickable { viewModel.toggleEditorFullscreen() }
+                            .testTag("btn_toggle_fullscreen")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (editorFullscreenMode) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                contentDescription = if (editorFullscreenMode) "Exit Fullscreen" else "Fullscreen Editor",
+                                tint = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = if (editorFullscreenMode) "Exit" else "Full",
+                                color = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     Text(

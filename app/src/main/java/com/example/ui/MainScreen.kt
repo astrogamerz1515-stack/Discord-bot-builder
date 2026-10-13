@@ -118,6 +118,8 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     val showSnippetsDialog by viewModel.showSnippetsDialog.collectAsState()
     val showGeneratedCodeDialog by viewModel.showGeneratedCodeDialog.collectAsState()
     val generatedCodeText by viewModel.generatedCodeText.collectAsState()
+    val editorFullscreenMode by viewModel.editorFullscreenMode.collectAsState()
+    val showBottomNavInEditor by viewModel.showBottomNavInEditor.collectAsState()
 
     if (currentTab != AppTab.HOME) {
         BackHandler {
@@ -131,17 +133,19 @@ fun MainScreen(viewModel: BotStudioViewModel) {
             .statusBarsPadding(),
         containerColor = DiscordBackground,
         topBar = {
-            // Top App Bar
-            Surface(
-                color = DiscordDarker,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (currentTab != AppTab.EDITOR || !editorFullscreenMode) {
+                // Top App Bar
+                Surface(
+                    color = DiscordDarker,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                     // Logo & App Name
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -359,64 +363,68 @@ fun MainScreen(viewModel: BotStudioViewModel) {
                     }
                 }
             }
-        },
-        bottomBar = {
-            // M3 Bottom Navigation Bar with 5 primary destinations for optimal ergonomic touch targets
-            val bottomTabs = listOf(
-                AppTab.HOME,
-                AppTab.EDITOR,
-                AppTab.TERMINAL,
-                AppTab.SIMULATOR,
-                AppTab.BOT_CONFIG
-            )
-            NavigationBar(
-                containerColor = DiscordSurface,
-                tonalElevation = 0.dp,
-                modifier = Modifier.testTag("bottom_nav_bar")
-            ) {
-                bottomTabs.forEach { tab ->
-                    val isSelected = currentTab == tab
-                    val (icon, label) = when (tab) {
-                        AppTab.HOME -> Icons.Default.Home to "Home"
-                        AppTab.EDITOR -> Icons.Default.Code to "Editor"
-                        AppTab.VISUAL_BUILDER -> Icons.Default.Extension to "Visual"
-                        AppTab.TERMINAL -> Icons.Default.Terminal to "Terminal"
-                        AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat to "Simulator"
-                        AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize to "Embeds"
-                        AppTab.STORAGE -> Icons.Default.Storage to "Storage"
-                        AppTab.EXTENSIONS -> Icons.Default.Extension to "Extensions"
-                        AppTab.GRADLE -> Icons.Default.Build to "Gradle"
-                        AppTab.PACKAGES -> Icons.Default.Extension to "Install"
-                        AppTab.BOT_CONFIG -> Icons.Default.Settings to "Config"
-                        AppTab.DEPLOY -> Icons.Default.CloudUpload to "Deploy"
-                    }
+        }
+    }
+},
+bottomBar = {
+            // Stretch the coding area fully by not displaying the 80dp NavigationBar when editing, unless explicitly toggled
+            if (currentTab != AppTab.EDITOR || showBottomNavInEditor) {
+                val bottomTabs = listOf(
+                    AppTab.HOME,
+                    AppTab.EDITOR,
+                    AppTab.TERMINAL,
+                    AppTab.SIMULATOR,
+                    AppTab.BOT_CONFIG
+                )
+                NavigationBar(
+                    containerColor = DiscordSurface,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.testTag("bottom_nav_bar")
+                ) {
+                    bottomTabs.forEach { tab ->
+                        val isSelected = currentTab == tab
+                        val (icon, label) = when (tab) {
+                            AppTab.HOME -> Icons.Default.Home to "Home"
+                            AppTab.EDITOR -> Icons.Default.Code to "Editor"
+                            AppTab.VISUAL_BUILDER -> Icons.Default.Extension to "Visual"
+                            AppTab.TERMINAL -> Icons.Default.Terminal to "Terminal"
+                            AppTab.SIMULATOR -> Icons.AutoMirrored.Filled.Chat to "Simulator"
+                            AppTab.EMBED_BUILDER -> Icons.Default.DashboardCustomize to "Embeds"
+                            AppTab.STORAGE -> Icons.Default.Storage to "Storage"
+                            AppTab.EXTENSIONS -> Icons.Default.Extension to "Extensions"
+                            AppTab.GRADLE -> Icons.Default.Build to "Gradle"
+                            AppTab.PACKAGES -> Icons.Default.Extension to "Install"
+                            AppTab.BOT_CONFIG -> Icons.Default.Settings to "Config"
+                            AppTab.DEPLOY -> Icons.Default.CloudUpload to "Deploy"
+                        }
 
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = { viewModel.setTab(tab) },
-                        icon = {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = label,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = label,
-                                fontSize = 10.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = DiscordBlurple,
-                            selectedTextColor = DiscordBlurple,
-                            indicatorColor = DiscordHover,
-                            unselectedIconColor = DiscordTextMuted,
-                            unselectedTextColor = DiscordTextMuted
-                        ),
-                        modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
-                    )
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = { viewModel.setTab(tab) },
+                            icon = {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = label,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = label,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = DiscordBlurple,
+                                selectedTextColor = DiscordBlurple,
+                                indicatorColor = DiscordHover,
+                                unselectedIconColor = DiscordTextMuted,
+                                unselectedTextColor = DiscordTextMuted
+                            ),
+                            modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                        )
+                    }
                 }
             }
         }

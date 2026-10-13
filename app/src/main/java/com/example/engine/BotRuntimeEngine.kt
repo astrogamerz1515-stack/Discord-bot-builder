@@ -1175,6 +1175,7 @@ class BotRuntimeEngine(
                 "clear", "cls" -> repository.clearTerminalLogs(project.id)
                 "help" -> {
                     repository.addTerminalLog(project.id, "=== BotStudio Developer Commands ===", "SYSTEM")
+                    repository.addTerminalLog(project.id, "  pm2 <cmd>          Auto PM2 24/7 daemon (start, list, restart, stop, logs, monit, save)", "SUCCESS")
                     repository.addTerminalLog(project.id, "  run / start        Start bot and connect to Discord Gateway v10", "STDOUT")
                     repository.addTerminalLog(project.id, "  stop / kill        Stop the active bot process", "STDOUT")
                     repository.addTerminalLog(project.id, "  restart            Restart process and gateway connection", "STDOUT")
@@ -1186,7 +1187,24 @@ class BotRuntimeEngine(
                     repository.addTerminalLog(project.id, "  ping               Measure Gateway and REST latency", "STDOUT")
                     repository.addTerminalLog(project.id, "  clear              Clear terminal log", "STDOUT")
                 }
-                "start", "run", "node", "python", "npm" -> startBot(project)
+                "pm2" -> {
+                    val pm2Output = Pm2ProcessManager.executeCommand(args, project, files, this@BotRuntimeEngine)
+                    pm2Output.forEach { (text, type) ->
+                        repository.addTerminalLog(project.id, text, type)
+                    }
+                }
+                "npm" -> {
+                    val scriptTarget = args.dropWhile { it == "run" }.firstOrNull() ?: "start"
+                    if (scriptTarget.contains("pm2")) {
+                        val pm2Output = Pm2ProcessManager.executeCommand(listOf("start"), project, files, this@BotRuntimeEngine)
+                        pm2Output.forEach { (text, type) ->
+                            repository.addTerminalLog(project.id, text, type)
+                        }
+                    } else {
+                        startBot(project)
+                    }
+                }
+                "start", "run", "node", "python" -> startBot(project)
                 "stop", "kill" -> stopBot(project.id)
                 "restart" -> restartBot(project)
                 "reload" -> hotReload(project.id)

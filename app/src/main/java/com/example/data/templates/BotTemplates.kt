@@ -166,6 +166,10 @@ client.login(process.env.DISCORD_TOKEN);
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "pm2": "pm2 start index.js --name bot",
+    "pm2:24/7": "pm2 start index.js --name bot --max-restarts 999",
+    "pm2:status": "pm2 status",
+    "pm2:stop": "pm2 stop bot",
     "dev": "nodemon index.js"
   },
   "dependencies": {

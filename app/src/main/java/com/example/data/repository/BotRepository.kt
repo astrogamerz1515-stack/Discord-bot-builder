@@ -35,6 +35,8 @@ class BotRepository(
 
     fun getTerminalLogs(projectId: Long): Flow<List<TerminalLog>> = logDao.getLogsForProject(projectId)
 
+    suspend fun getTerminalLogsDirect(projectId: Long): List<TerminalLog> = logDao.getLogsForProjectDirect(projectId)
+
     fun getEmbeds(projectId: Long): Flow<List<SavedEmbed>> = embedDao.getEmbedsForProject(projectId)
 
     fun getStorage(projectId: Long): Flow<List<com.example.data.model.BotKeyValue>> = keyValueDao.getStorageForProject(projectId)

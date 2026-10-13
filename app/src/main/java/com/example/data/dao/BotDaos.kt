@@ -74,6 +74,9 @@ interface TerminalLogDao {
     @Query("SELECT * FROM terminal_logs WHERE projectId = :projectId ORDER BY timestamp ASC LIMIT 500")
     fun getLogsForProject(projectId: Long): Flow<List<TerminalLog>>
 
+    @Query("SELECT * FROM terminal_logs WHERE projectId = :projectId ORDER BY timestamp ASC LIMIT 500")
+    suspend fun getLogsForProjectDirect(projectId: Long): List<TerminalLog>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLog(log: TerminalLog)
 

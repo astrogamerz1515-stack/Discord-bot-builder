@@ -157,6 +157,18 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     val showGeneratedCodeDialog = MutableStateFlow(false)
     val generatedCodeText = MutableStateFlow("")
 
+    // Editor display configuration states
+    val editorFullscreenMode = MutableStateFlow(false)
+    val showBottomNavInEditor = MutableStateFlow(false)
+
+    fun toggleEditorFullscreen() {
+        editorFullscreenMode.value = !editorFullscreenMode.value
+    }
+
+    fun toggleBottomNavInEditor() {
+        showBottomNavInEditor.value = !showBottomNavInEditor.value
+    }
+
     // Import & Auto-Correction Summary Dialog State
     private val _lastImportFixes = MutableStateFlow<List<String>>(emptyList())
     val lastImportFixes: StateFlow<List<String>> = _lastImportFixes.asStateFlow()
@@ -172,6 +184,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     private var diagnosticsJob: Job? = null
 
     init {
+        com.example.engine.Pm2ProcessManager.initialize(application, repository)
         com.example.engine.CommandResponseOptimizer.startMonitoring(viewModelScope)
         com.example.service.BotBackgroundService.onServiceStopListener = {
             stopBotProcess()
@@ -838,6 +851,100 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val (success, msg) = runtimeEngine.syncGuildCommands(project, guildId)
             onResult(success, msg)
+        }
+    }
+
+    val pm2Processes = com.example.engine.Pm2ProcessManager.processes
+    val isPm2DaemonActive = com.example.engine.Pm2ProcessManager.isDaemonActive
+    fun runPm2Script(script: String? = null) = runScriptWithPm2(script)
+
+    fun runScriptWithPm2(script: String? = null) {
+        val project = _currentProject.value ?: return
+        saveActiveFile()
+        val files = _projectFiles.value
+        val targetScript = script ?: files.firstOrNull { it.isEntrypoint }?.filePath
+            ?: files.firstOrNull { it.filePath == "index.js" || it.filePath == "bot.py" }?.filePath
+            ?: "index.js"
+
+        addPm2ToPackageJson()
+
+        val cleanToken = runtimeEngine.sanitizeToken(project.botToken)
+        val cleanProject = if (cleanToken != project.botToken) project.copy(botToken = cleanToken) else project
+
+        com.example.engine.Pm2ProcessManager.startScript(
+            script = targetScript,
+            name = project.name.lowercase().replace(" ", "-"),
+            project = cleanProject,
+            files = files,
+            engine = runtimeEngine,
+            watch = true
+        )
+
+        try {
+            com.example.service.BotBackgroundService.start(getApplication(), project.id, project.name)
+        } catch (_: Exception) {}
+
+        runtimeEngine.logAsync(project.id, "🚀 [AUTO PM2] Started '$targetScript' under PM2 24/7 Process Manager!", "SUCCESS")
+        runtimeEngine.logAsync(project.id, "⚡ Script will stay ALIVE 24/7 with zero downtime even when app is closed.", "SUCCESS")
+    }
+
+    fun stopPm2Script(target: String = "all") {
+        val project = _currentProject.value ?: return
+        com.example.engine.Pm2ProcessManager.stopProcess(target, runtimeEngine, project.id)
+        runtimeEngine.logAsync(project.id, "🛑 [PM2] Stopped process [$target].", "WARN")
+    }
+
+    fun addPm2ToPackageJson() {
+        val current = _currentProject.value ?: return
+        viewModelScope.launch {
+            val files = repository.getFilesDirect(current.id)
+            val pkgFile = files.find { it.filePath == "package.json" }
+            if (pkgFile != null) {
+                val content = pkgFile.content
+                if (!content.contains("\"pm2\"")) {
+                    val updatedContent = if (content.contains("\"scripts\": {")) {
+                        content.replace(
+                            "\"scripts\": {",
+                            "\"scripts\": {\n    \"pm2\": \"pm2 start index.js --name bot\",\n    \"pm2:24/7\": \"pm2 start index.js --name bot --max-restarts 999\",\n    \"pm2:status\": \"pm2 status\",\n    \"pm2:stop\": \"pm2 stop bot\","
+                        )
+                    } else if (content.contains("\"scripts\":{")) {
+                        content.replace(
+                            "\"scripts\":{",
+                            "\"scripts\":{\n    \"pm2\": \"pm2 start index.js --name bot\",\n    \"pm2:24/7\": \"pm2 start index.js --name bot --max-restarts 999\","
+                        )
+                    } else {
+                        content.replaceFirst(
+                            "{",
+                            "{\n  \"scripts\": {\n    \"start\": \"node index.js\",\n    \"pm2\": \"pm2 start index.js --name bot\",\n    \"pm2:24/7\": \"pm2 start index.js --name bot --max-restarts 999\"\n  },"
+                        )
+                    }
+                    val updated = pkgFile.copy(content = updatedContent, updatedAt = System.currentTimeMillis())
+                    repository.saveFile(updated)
+                    runtimeEngine.logAsync(current.id, "📦 [PM2] Added 24/7 PM2 scripts to package.json!", "SUCCESS")
+                }
+            } else {
+                repository.createFile(
+                    projectId = current.id,
+                    filePath = "package.json",
+                    content = """{
+  "name": "${current.name.lowercase().replace(" ", "-")}",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "pm2": "pm2 start index.js --name bot",
+    "pm2:24/7": "pm2 start index.js --name bot --max-restarts 999",
+    "pm2:status": "pm2 status",
+    "pm2:stop": "pm2 stop bot"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5"
+  }
+}"""
+                )
+                runtimeEngine.logAsync(current.id, "📦 [PM2] Created package.json with Auto PM2 24/7 scripts!", "SUCCESS")
+            }
         }
     }
 
