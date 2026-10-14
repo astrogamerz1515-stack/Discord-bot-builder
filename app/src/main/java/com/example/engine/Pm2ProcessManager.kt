@@ -72,6 +72,7 @@ object Pm2ProcessManager {
     private var supervisorJob: Job? = null
     private var repositoryRef: BotRepository? = null
     private var appContext: Context? = null
+    private fun getSafeContext(): Context? = appContext ?: BotRuntimeManager.appContext
     private val scope = CoroutineScope(Dispatchers.IO)
 
     fun initialize(context: Context, repository: BotRepository) {
@@ -161,7 +162,7 @@ object Pm2ProcessManager {
 
             "startup", "resurrect" -> {
                 val count = restoreSavedState()
-                appContext?.let { ctx ->
+                getSafeContext()?.let { ctx ->
                     BotBackgroundService.start(ctx, project.id, project.name)
                 }
                 out.add("[PM2] Restoring PM2 processes from dump..." to "STDOUT")
@@ -197,7 +198,7 @@ object Pm2ProcessManager {
             "kill" -> {
                 _processes.value = emptyList()
                 engine.stopBot(project.id)
-                appContext?.let { ctx ->
+                getSafeContext()?.let { ctx ->
                     BotBackgroundService.stop(ctx)
                 }
                 saveState()
@@ -268,7 +269,7 @@ object Pm2ProcessManager {
         if (!engine.isRunning.value) {
             engine.startBot(project)
         }
-        appContext?.let { ctx ->
+        getSafeContext()?.let { ctx ->
             BotBackgroundService.start(ctx, project.id, project.name)
         }
 
@@ -293,7 +294,7 @@ object Pm2ProcessManager {
 
         if (current.none { it.status == Pm2Status.ONLINE }) {
             engine.stopBot(projectId)
-            appContext?.let { ctx ->
+            getSafeContext()?.let { ctx ->
                 BotBackgroundService.stop(ctx)
             }
         }
@@ -324,7 +325,7 @@ object Pm2ProcessManager {
         saveState()
 
         engine.restartBot(project)
-        appContext?.let { ctx ->
+        getSafeContext()?.let { ctx ->
             BotBackgroundService.start(ctx, project.id, project.name)
         }
 
@@ -346,7 +347,7 @@ object Pm2ProcessManager {
 
         if (current.none { it.status == Pm2Status.ONLINE }) {
             engine.stopBot(projectId)
-            appContext?.let { ctx ->
+            getSafeContext()?.let { ctx ->
                 BotBackgroundService.stop(ctx)
             }
         }
@@ -429,7 +430,7 @@ object Pm2ProcessManager {
                     _processes.value = updated
 
                     // Ensure Android service is actively guarding the script
-                    appContext?.let { ctx ->
+                    getSafeContext()?.let { ctx ->
                         if (!BotBackgroundService.isBotMarkedRunning(ctx)) {
                             val engine = BotRuntimeManager.currentEngine()
                             val runningProjId = engine?.runningProjectId?.value ?: 0L
@@ -445,7 +446,7 @@ object Pm2ProcessManager {
 
     private fun saveState() {
         try {
-            val ctx = appContext ?: return
+            val ctx = getSafeContext() ?: return
             val jsonArr = JSONArray()
             _processes.value.forEach { p ->
                 val obj = JSONObject().apply {
@@ -473,7 +474,7 @@ object Pm2ProcessManager {
 
     private fun restoreSavedState(): Int {
         try {
-            val ctx = appContext ?: return 0
+            val ctx = getSafeContext() ?: return 0
             val raw = ctx.getSharedPreferences(PREFS_PM2, Context.MODE_PRIVATE)
                 .getString(KEY_PM2_PROCESSES, null) ?: return 0
             val jsonArr = JSONArray(raw)

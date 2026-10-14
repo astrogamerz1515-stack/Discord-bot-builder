@@ -107,14 +107,15 @@ class BotRuntimeEngine(
     // High-performance shared connection pool to eliminate TLS handshake latency
     private val connectionPool = okhttp3.ConnectionPool(10, 5, TimeUnit.MINUTES)
 
-    // Optimized OkHttp Client with HTTP/2, ConnectionPool, and WebSocket PingInterval (20s)
-    // The pingInterval keeps the socket alive 24/7 across screen lock, backgrounding, and Doze mode
+    // Optimized OkHttp Client with HTTP/2, ConnectionPool, and keep-alive configuration
+    // Disabling raw transport pingInterval (0ms) prevents OkHttp from throwing 'Software caused connection abort'
+    // when backgrounded. Discord Gateway uses application-level Opcode 1 Heartbeats.
     private val httpClient = OkHttpClient.Builder()
         .connectionPool(connectionPool)
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // 0 for persistent WebSocket
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .pingInterval(20, TimeUnit.SECONDS) // CRITICAL: RFC 6455 transport ping prevents cellular/Wi-Fi NAT drops
+        .writeTimeout(12, TimeUnit.SECONDS)
+        .pingInterval(0, TimeUnit.MILLISECONDS) // 0: rely strictly on Discord Gateway Opcode 1 heartbeats
         .retryOnConnectionFailure(true)
         .build()
 
@@ -146,6 +147,8 @@ class BotRuntimeEngine(
     private var lastHeartbeatSentAt: Long = 0L
     private var lastHeartbeatAckAt: Long = 0L
     private var isAwaitingAck: Boolean = false
+    private val isConnectingGateway = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastConnectAttemptTime = 0L
 
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
@@ -234,8 +237,16 @@ class BotRuntimeEngine(
         fun diagnoseToken(raw: String): String? {
             val t = sanitizeToken(raw)
             if (t.isBlank()) return "Please enter your Discord Bot Token."
-            if (t.contains("DiscordSecretBotToken") || t.contains("G-DiscordSecret")) {
-                return "⚠️ Placeholder token detected. Go to Discord Developer Portal -> Bot -> 'Reset Token' to generate your real Bot Token."
+            val lower = t.lowercase()
+            if (lower.contains("discordsecret") ||
+                lower.contains("example") ||
+                lower.contains("placeholder") ||
+                lower.contains("tokenhere") ||
+                lower.contains("yourtoken") ||
+                lower.contains("dummy") ||
+                lower.contains("sample")
+            ) {
+                return "⚠️ Placeholder / example token detected. Paste your real Discord Bot Token from the Discord Developer Portal."
             }
             if (t.all { it.isDigit() } && t.length in 15..23) {
                 return "⚠️ You entered an Application / Client ID (${t.length} digits), not a Bot Token! In Discord Developer Portal -> 'Bot' tab -> 'Reset Token' to copy the real token."
@@ -246,19 +257,29 @@ class BotRuntimeEngine(
             if (!t.contains(".") && t.length == 64 && t.all { it.isLetterOrDigit() }) {
                 return "⚠️ You entered a Public Key (64 chars), not a Bot Token! In Developer Portal, go to 'Bot' tab -> 'Reset Token'."
             }
-            if (!t.contains(".") && t.length < 50) {
-                return "⚠️ Discord Bot Tokens contain dots separating parts (ID.Timestamp.Secret). Check the 'Bot' tab in Developer Portal."
+            val dotCount = t.count { it == '.' }
+            if (dotCount < 2 || t.length < 50) {
+                return "⚠️ Discord Bot Tokens contain 3 parts separated by dots (ID.Timestamp.HMAC, ~59-72 chars). Check 'Bot' tab in Developer Portal."
             }
             return null
         }
 
         fun isRealToken(token: String): Boolean {
             val t = sanitizeToken(token)
-            return t.isNotBlank() &&
-                    !t.contains("DiscordSecretBotToken") &&
-                    !t.contains("G-DiscordSecret") &&
-                    t.length >= 35 &&
-                    t.contains(".")
+            if (t.isBlank()) return false
+            val lower = t.lowercase()
+            if (lower.contains("discordsecret") ||
+                lower.contains("example") ||
+                lower.contains("placeholder") ||
+                lower.contains("tokenhere") ||
+                lower.contains("yourtoken") ||
+                lower.contains("dummy") ||
+                lower.contains("sample")
+            ) {
+                return false
+            }
+            val dotCount = t.count { it == '.' }
+            return dotCount >= 2 && t.length >= 50
         }
     }
 
@@ -269,8 +290,15 @@ class BotRuntimeEngine(
         val cleanToken = sanitizeToken(project.botToken)
         val hasRealToken = isRealToken(cleanToken)
 
+        // Ensure Android foreground service and system locks are guarding the bot 24/7
+        BotRuntimeManager.appContext?.let { ctx ->
+            try {
+                com.example.service.BotBackgroundService.start(ctx, project.id, project.name)
+            } catch (_: Exception) {}
+        }
+
         if (_isRunning.value && currentProjectId == project.id) {
-            if (hasRealToken && !_isRealDiscordConnected.value) {
+            if (hasRealToken && !_isRealDiscordConnected.value && !isConnectingGateway.get()) {
                 scope.launch(Dispatchers.IO) {
                     connectRealDiscordGateway(project, isResumeAttempt = sessionId != null)
                 }
@@ -343,10 +371,18 @@ class BotRuntimeEngine(
 
     /**
      * Connects to Discord Gateway v10 WebSocket. Supports session resume when available.
-     * Integrates automatic reconnection loop with exponential backoff.
+     * Integrates automatic reconnection loop with exponential backoff and rate-limit guard.
      */
     private fun connectRealDiscordGateway(project: BotProject, isResumeAttempt: Boolean) {
         if (!_isRunning.value) return
+
+        // Throttle connection attempts to adhere to Discord's 5s identify rate-limit
+        val now = System.currentTimeMillis()
+        if (now - lastConnectAttemptTime < 4500L && isConnectingGateway.get()) {
+            return
+        }
+        lastConnectAttemptTime = now
+        isConnectingGateway.set(true)
 
         isResuming = isResumeAttempt && sessionId != null && lastSequence != null
         val gatewayUrl = if (isResuming && !resumeGatewayUrl.isNullOrBlank()) {
@@ -370,7 +406,7 @@ class BotRuntimeEngine(
 
         discordWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                // Cancel pending reconnect attempts upon successful connection
+                isConnectingGateway.set(false)
                 reconnectJob?.cancel()
                 reconnectJob = null
                 logAsync(project.id, "[GATEWAY] WebSocket handshake opened. Waiting for HELLO opcode 10...", "STDOUT")
@@ -381,6 +417,7 @@ class BotRuntimeEngine(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                isConnectingGateway.set(false)
                 _isRealDiscordConnected.value = false
                 _botStatusText.value = "Connection Interrupted (Auto-reconnecting...)"
                 val code = response?.code
@@ -391,7 +428,7 @@ class BotRuntimeEngine(
                     webSocket.cancel()
                 } catch (e: Exception) {}
 
-                // Continuous auto-reconnect with exponential backoff (survives backgrounding, lock screen, Doze)
+                // Continuous auto-reconnect with safe exponential backoff
                 scheduleAutoReconnect(project, "Network failure ($errMsg)")
             }
 
@@ -400,6 +437,7 @@ class BotRuntimeEngine(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                isConnectingGateway.set(false)
                 handleGatewayClose(code, reason, project)
             }
         })
@@ -408,18 +446,18 @@ class BotRuntimeEngine(
     /**
      * Continuous auto-reconnect loop with exponential backoff.
      * Guarantees that when the app is closed, minimized, or the phone turns off,
-     * the bot will continuously reconnect as soon as network is available!
+     * the bot will continuously reconnect without racing or self-cancelling.
      */
     private fun scheduleAutoReconnect(project: BotProject, reason: String) {
         if (!_isRunning.value) return
         if (reconnectJob?.isActive == true) return
 
         reconnectJob = scope.launch(Dispatchers.IO) {
-            var delayMs = 1500L
+            var delayMs = 3000L
             var attempts = 0
             while (isActive && _isRunning.value && !_isRealDiscordConnected.value) {
                 attempts++
-                logAsync(project.id, "🔄 [GATEWAY AUTO-RECONNECT] Attempt #$attempts ($reason) in ${delayMs}ms...", "WARN")
+                logAsync(project.id, "🔄 [GATEWAY AUTO-RECONNECT] Attempt #$attempts ($reason) in ${delayMs / 1000}s...", "WARN")
                 delay(delayMs)
                 if (!_isRunning.value || _isRealDiscordConnected.value) break
 
@@ -430,14 +468,24 @@ class BotRuntimeEngine(
                     logAsync(project.id, "⚠️ [GATEWAY RETRY ERROR] ${e.message}", "WARN")
                 }
 
-                // Exponential backoff capped at 10 seconds
-                delayMs = (delayMs * 1.5).toLong().coerceAtMost(10000L)
+                // Wait for the handshake to conclude or timeout before looping again
+                val waitStart = System.currentTimeMillis()
+                while (isActive && _isRunning.value && !_isRealDiscordConnected.value && isConnectingGateway.get()) {
+                    delay(500L)
+                    if (System.currentTimeMillis() - waitStart > 8000L) {
+                        isConnectingGateway.set(false)
+                        break
+                    }
+                }
+
+                // Exponential backoff capped at 15 seconds
+                delayMs = (delayMs * 1.5).toLong().coerceIn(3000L, 15000L)
             }
         }
     }
 
     /**
-     * Close Code Decision Matrix: Decides between Resume, Re-Identify, or Fatal Halt.
+     * Close Code Decision Matrix: Decides between Resume, Re-Identify, or Local Simulator Fallback.
      */
     private fun handleGatewayClose(code: Int, reason: String, project: BotProject) {
         scope.launch(Dispatchers.IO) {
@@ -445,26 +493,35 @@ class BotRuntimeEngine(
 
             when (code) {
                 4004 -> {
-                    // Fatal: Invalid Token
+                    // Invalid token -> Never kill the 24/7 runner or PM2! Fallback gracefully to Simulator mode!
                     sessionId = null
                     lastSequence = null
-                    _isRunning.value = false
-                    _runningProjectId.value = null
+                    isConnectingGateway.set(false)
+                    _isRealDiscordConnected.value = false
                     logAsync(project.id, "❌ [ERROR 4004] Authentication Failed: Invalid Discord Bot Token. Please check token in Config tab.", "STDERR")
+                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Script running in 24/7 Local Simulator mode so processes never die.", "SUCCESS")
+                    startSimulatorMode(project)
                     return@launch
                 }
                 4014 -> {
-                    // Fatal: Missing Intent
+                    // Missing intents -> Never kill the 24/7 runner! Fallback to Simulator mode!
                     sessionId = null
                     lastSequence = null
-                    _isRunning.value = false
-                    _runningProjectId.value = null
-                    logAsync(project.id, "❌ [ERROR 4014] Disallowed Intents: You MUST enable 'Message Content Intent' in Discord Developer Portal -> Bot -> Privileged Gateway Intents.", "STDERR")
+                    isConnectingGateway.set(false)
+                    _isRealDiscordConnected.value = false
+                    logAsync(project.id, "❌ [ERROR 4014] Disallowed Intents: Enable 'Message Content Intent' in Developer Portal -> Bot -> Privileged Gateway Intents.", "STDERR")
+                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Preserving script execution in 24/7 Local Simulator mode.", "SUCCESS")
+                    startSimulatorMode(project)
                     return@launch
                 }
                 4010, 4011, 4012, 4013 -> {
-                    // Fatal configuration errors
+                    sessionId = null
+                    lastSequence = null
+                    isConnectingGateway.set(false)
+                    _isRealDiscordConnected.value = false
                     logAsync(project.id, "❌ [FATAL GATEWAY ERROR $code] $reason", "STDERR")
+                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Preserving script execution in 24/7 Local Simulator mode.", "SUCCESS")
+                    startSimulatorMode(project)
                     return@launch
                 }
                 4007, 4009 -> {
@@ -852,15 +909,22 @@ class BotRuntimeEngine(
             val initialDelay = (heartbeatIntervalMs * jitter).toLong().coerceAtLeast(1000L)
             delay(initialDelay)
 
+            var missedAcks = 0
             while (isActive && _isRunning.value) {
-                // Zombie connection detection: If previous heartbeat was not ACKed, abort stale socket and reconnect
+                // Zombie connection detection: Require 2 missed ACKs before closing socket
+                // (prevents dropping connections during brief screen lock or app switching transitions)
                 if (isAwaitingAck) {
-                    logAsync(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing from Discord. Reconnecting session...", "WARN")
-                    try {
-                        webSocket.close(4000, "Heartbeat ACK missing")
-                    } catch (e: Exception) {}
-                    scheduleAutoReconnect(activeProject ?: return@launch, "Zombie connection (ACK missing)")
-                    break
+                    missedAcks++
+                    if (missedAcks >= 2) {
+                        logAsync(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing ($missedAcks cycles). Reconnecting session...", "WARN")
+                        try {
+                            webSocket.close(4000, "Heartbeat ACK missing")
+                        } catch (e: Exception) {}
+                        scheduleAutoReconnect(activeProject ?: return@launch, "Zombie connection (ACK missing)")
+                        break
+                    }
+                } else {
+                    missedAcks = 0
                 }
 
                 isAwaitingAck = true
@@ -1100,6 +1164,7 @@ class BotRuntimeEngine(
 
     fun stopBot(projectId: Long) {
         if (!_isRunning.value) return
+        isConnectingGateway.set(false)
         reconnectJob?.cancel()
         reconnectJob = null
         heartbeatJob?.cancel()

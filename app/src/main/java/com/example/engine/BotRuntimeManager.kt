@@ -1,5 +1,6 @@
 package com.example.engine
 
+import android.content.Context
 import com.example.data.repository.BotRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +19,13 @@ object BotRuntimeManager {
     @Volatile
     private var engineInstance: BotRuntimeEngine? = null
 
-    fun getEngine(repository: BotRepository): BotRuntimeEngine {
+    @Volatile
+    var appContext: Context? = null
+
+    fun getEngine(repository: BotRepository, context: Context? = null): BotRuntimeEngine {
+        if (context != null && appContext == null) {
+            appContext = context.applicationContext
+        }
         return engineInstance ?: synchronized(this) {
             engineInstance ?: BotRuntimeEngine(repository, applicationScope).also {
                 engineInstance = it

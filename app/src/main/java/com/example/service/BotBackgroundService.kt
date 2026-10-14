@@ -187,6 +187,19 @@ class BotBackgroundService : Service() {
         acquireSystemLocks()
         registerNetworkWatcher()
         startInternalWatchdog()
+
+        try {
+            val database = AppDatabase.getDatabase(applicationContext)
+            val repository = BotRepository(
+                database.botProjectDao(),
+                database.botFileDao(),
+                database.terminalLogDao(),
+                database.savedEmbedDao(),
+                database.botKeyValueDao()
+            )
+            BotRuntimeManager.getEngine(repository, applicationContext)
+            com.example.engine.Pm2ProcessManager.initialize(applicationContext, repository)
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -307,7 +320,7 @@ class BotBackgroundService : Service() {
                         super.onAvailable(network)
                         val engine = BotRuntimeManager.currentEngine()
                         if (engine != null && isBotMarkedRunning(this@BotBackgroundService)) {
-                            if (!engine.isRealDiscordConnected.value && activeProjectId > 0) {
+                            if (!engine.isRunning.value && activeProjectId > 0) {
                                 ensureBotEngineRunning(activeProjectId)
                             }
                         }
@@ -338,7 +351,7 @@ class BotBackgroundService : Service() {
                     database.savedEmbedDao(),
                     database.botKeyValueDao()
                 )
-                val engine = BotRuntimeManager.getEngine(repository)
+                val engine = BotRuntimeManager.getEngine(repository, applicationContext)
 
                 var targetId = projectId
                 if (targetId <= 0) {
@@ -355,8 +368,7 @@ class BotBackgroundService : Service() {
                     val project = repository.getProjectSync(targetId)
                     if (project != null) {
                         activeBotName = project.name
-                        val hasToken = BotRuntimeEngine.isRealToken(project.botToken)
-                        if (!engine.isRunning.value || (hasToken && !engine.isRealDiscordConnected.value)) {
+                        if (!engine.isRunning.value) {
                             engine.startBot(project)
                         }
                     }
