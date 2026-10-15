@@ -21,10 +21,15 @@ object IntelliSenseEngine {
 
         val baseItems = IntelliSenseRegistry.getItemsForFile(filePath).toMutableList()
 
-        // Extract in-file identifiers dynamically
-        if (code.length < 150_000 && currentToken.length >= 2) {
+        // Extract in-file identifiers dynamically without scanning huge files
+        if (currentToken.length >= 2) {
+            val codeToScan = if (code.length > 25_000) {
+                code.substring(maxOf(0, safeCursor - 4000), minOf(code.length, safeCursor + 4000))
+            } else {
+                code
+            }
             val fileIdentifiers = Regex("""\b(?:const|let|var|function|def|class|val|fun|local)\s+([A-Za-z0-9_$]+)""")
-                .findAll(code)
+                .findAll(codeToScan)
                 .map { it.groupValues[1] }
                 .filter { it.contains(currentToken, ignoreCase = true) && it != currentToken }
                 .distinct()

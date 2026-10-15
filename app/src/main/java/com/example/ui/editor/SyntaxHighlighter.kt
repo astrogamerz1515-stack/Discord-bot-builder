@@ -22,12 +22,21 @@ class SyntaxHighlightTransformation(
     private val ghostText: String? = null,
     private val ghostOffset: Int = -1
 ) : VisualTransformation {
+    private var lastRawText: String? = null
+    private var lastFilePath: String? = null
+    private var lastGhostText: String? = null
+    private var lastGhostOffset: Int = -1
+    private var lastResult: TransformedText? = null
+
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
+        if (raw == lastRawText && filePath == lastFilePath && ghostText == lastGhostText && ghostOffset == lastGhostOffset && lastResult != null) {
+            return lastResult!!
+        }
         return try {
             val highlighted = SyntaxHighlighter.highlight(raw, filePath)
             val cleanGhost = ghostText?.takeIf { it.isNotEmpty() }
-            if (cleanGhost == null || ghostOffset < 0 || ghostOffset > raw.length) {
+            val result = if (cleanGhost == null || ghostOffset < 0 || ghostOffset > raw.length) {
                 TransformedText(
                     text = highlighted,
                     offsetMapping = OffsetMapping.Identity
@@ -79,18 +88,30 @@ class SyntaxHighlightTransformation(
                     offsetMapping = offsetMapping
                 )
             }
+            lastRawText = raw
+            lastFilePath = filePath
+            lastGhostText = ghostText
+            lastGhostOffset = ghostOffset
+            lastResult = result
+            result
         } catch (_: Throwable) {
-            TransformedText(
+            val fallback = TransformedText(
                 text = text,
                 offsetMapping = OffsetMapping.Identity
             )
+            lastResult = fallback
+            fallback
         }
     }
 }
 
 object SyntaxHighlighter {
 
-    private const val MAX_HIGHLIGHT_CHARS = 60_000
+    private const val MAX_HIGHLIGHT_CHARS = 20_000
+
+    @Volatile private var cachedRaw: String? = null
+    @Volatile private var cachedFilePath: String? = null
+    @Volatile private var cachedHighlighted: AnnotatedString? = null
 
     // Precompiled Static Regexes to avoid per-line instantiation overhead
     private val STRING_REGEX = Regex("(\"[^\"]*\"|'[^']*'|`[^`]*`)")
@@ -210,13 +231,20 @@ object SyntaxHighlighter {
 
     fun highlight(code: String, filePath: String): AnnotatedString {
         if (code.isEmpty()) return AnnotatedString("")
-        // For mega-sized files (>250,000 characters), skip heavy regex formatting to guarantee instant 60fps editing
-        if (code.length > 250_000) {
-            return AnnotatedString(code)
+        if (code == cachedRaw && filePath == cachedFilePath && cachedHighlighted != null) {
+            return cachedHighlighted!!
+        }
+        // For mega-sized files (>80,000 characters), skip heavy regex formatting to guarantee instant 60fps editing
+        if (code.length > 80_000) {
+            val plain = AnnotatedString(code)
+            cachedRaw = code
+            cachedFilePath = filePath
+            cachedHighlighted = plain
+            return plain
         }
         val extension = filePath.substringAfterLast('.', "").lowercase()
 
-        return buildAnnotatedString {
+        val result = buildAnnotatedString {
             append(code)
 
             val codeLen = code.length
@@ -333,6 +361,10 @@ object SyntaxHighlighter {
                 lineStart = nextLineStart
             }
         }
+        cachedRaw = code
+        cachedFilePath = filePath
+        cachedHighlighted = result
+        return result
     }
 
     private fun highlightMarkdownLine(line: String, offset: Int, builder: AnnotatedString.Builder, maxLen: Int) {

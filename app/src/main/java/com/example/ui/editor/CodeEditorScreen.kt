@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +63,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -182,6 +186,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     val redoStack = remember { mutableStateListOf<TextFieldValue>() }
 
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
 
     // Launcher for exporting project to ZIP from editor
     val zipExportLauncher = rememberLauncherForActivityResult(
@@ -303,9 +308,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
     val isPython = currentFileExtension == "py"
 
-    // Real-time Inline Suggestion Calculation
+    // Real-time Inline Suggestion Calculation (capped at 35k chars for silky smooth 60fps typing)
     val inlineSuggestion = remember(textFieldValue.text, cursorPosition, effectiveFilePath, isBinaryFile, inlineDismissedOffset) {
-        if (isBinaryFile || textFieldValue.text.length > 250_000 || cursorPosition == inlineDismissedOffset) null
+        if (isBinaryFile || textFieldValue.text.length > 35_000 || cursorPosition == inlineDismissedOffset) null
         else {
             try {
                 InlineSuggestionEngine.computeInlineSuggestion(
@@ -357,9 +362,9 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         line to col
     }
 
-    // Compute dynamic IntelliSense completions with safety bounds
+    // Compute dynamic IntelliSense completions with safety bounds (capped at 35k chars)
     val completions = remember(textFieldValue.text, cursorPosition, effectiveFilePath, isBinaryFile) {
-        if (isBinaryFile || textFieldValue.text.length > 250_000) emptyList()
+        if (isBinaryFile || textFieldValue.text.length > 35_000) emptyList()
         else {
             try {
                 IntelliSenseEngine.computeCompletions(
@@ -375,7 +380,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
     // Compute active function signature help with safety bounds
     val signatureHelp = remember(textFieldValue.text, cursorPosition, isBinaryFile) {
-        if (isBinaryFile || textFieldValue.text.length > 250_000) null
+        if (isBinaryFile || textFieldValue.text.length > 35_000) null
         else {
             try {
                 IntelliSenseEngine.computeSignatureHelp(
@@ -477,6 +482,59 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         val newPos = (textFieldValue.selection.end + delta).coerceIn(0, textFieldValue.text.length)
         textFieldValue = textFieldValue.copy(selection = TextRange(newPos))
         inlineDismissedOffset = -1
+    }
+
+    fun pasteFromClipboard(replaceAll: Boolean = false) {
+        try {
+            val systemClipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clipData = systemClipboard?.primaryClip
+            var clipText: String? = null
+            if (clipData != null && clipData.itemCount > 0) {
+                val item = clipData.getItemAt(0)
+                clipText = item.coerceToText(context)?.toString()
+            }
+            if (clipText.isNullOrEmpty()) {
+                clipText = clipboardManager.getText()?.text
+            }
+
+            if (clipText.isNullOrEmpty()) {
+                Toast.makeText(context, "Clipboard is empty or contains no text", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            if (undoStack.size > 50) undoStack.removeAt(0)
+            undoStack.add(textFieldValue)
+            redoStack.clear()
+
+            val oldText = textFieldValue.text
+            val newText: String
+            val newCursor: Int
+
+            if (replaceAll || oldText.isEmpty() || textFieldValue.selection.length == oldText.length) {
+                newText = clipText
+                newCursor = clipText.length
+            } else {
+                val selStart = textFieldValue.selection.min.coerceIn(0, oldText.length)
+                val selEnd = textFieldValue.selection.max.coerceIn(0, oldText.length)
+                newText = oldText.substring(0, selStart) + clipText + oldText.substring(selEnd)
+                newCursor = (selStart + clipText.length).coerceIn(0, newText.length)
+            }
+
+            lastEditorText = newText
+            textFieldValue = TextFieldValue(newText, TextRange(newCursor))
+            viewModel.updateActiveFileContent(newText)
+            inlineDismissedOffset = -1
+
+            val lineCount = clipText.count { it == '\n' } + 1
+            Toast.makeText(
+                context,
+                "📋 Pasted full code: ${clipText.length} chars ($lineCount lines)",
+                Toast.LENGTH_SHORT
+            ).show()
+            focusRequester.requestFocus()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Paste failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // Find & Replace Search Logic
@@ -851,6 +909,36 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
+            // 📋 Paste Full Code from Clipboard
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable { pasteFromClipboard() }
+                    .testTag("btn_toolbar_paste")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentPaste,
+                        contentDescription = "Paste Code",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Paste",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
             // Prettier Code Formatter Button
             Surface(
                 color = DiscordHover,
@@ -951,36 +1039,36 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
 
-            // Quick Font Zoom In / Out Buttons
+            // 📋 Quick Paste Button (Preserves full code without truncation)
             Surface(
                 color = DiscordElevated,
                 shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple),
                 modifier = Modifier
                     .heightIn(min = 32.dp)
-                    .clickable {
-                        fontScale = (fontScale - 0.1f).coerceIn(0.65f, 2.5f)
-                    }
-                    .testTag("btn_zoom_out")
+                    .clickable { pasteFromClipboard() }
+                    .testTag("btn_quick_paste_code")
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                    Text("A-", color = DiscordTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentPaste,
+                        contentDescription = "Paste",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Paste",
+                        color = DiscordTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
-            Surface(
-                color = DiscordElevated,
-                shape = RoundedCornerShape(4.dp),
-                modifier = Modifier
-                    .heightIn(min = 32.dp)
-                    .clickable {
-                        fontScale = (fontScale + 0.1f).coerceIn(0.65f, 2.5f)
-                    }
-                    .testTag("btn_zoom_in")
-            ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                    Text("A+", color = DiscordTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
 
             // Cursor navigation buttons
             Surface(
@@ -1283,20 +1371,72 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             }
 
             val horizontalScrollState = rememberScrollState()
+            val density = LocalDensity.current
+            val lineHeightPx = with(density) { currentLineHeight.toPx() }
+
+            // Move cursor to specific line, request focus and open keyboard without modifying zoom
+            val moveCursorToLine: (Int) -> Unit = { targetLine ->
+                val text = textFieldValue.text
+                if (text.isEmpty()) {
+                    textFieldValue = textFieldValue.copy(selection = TextRange(0))
+                } else {
+                    var currentLine = 1
+                    var targetIndex = 0
+                    for (i in text.indices) {
+                        if (currentLine == targetLine) {
+                            targetIndex = i
+                            break
+                        }
+                        if (text[i] == '\n') {
+                            currentLine++
+                            if (currentLine == targetLine) {
+                                targetIndex = i + 1
+                                break
+                            }
+                        }
+                    }
+                    if (currentLine < targetLine) {
+                        targetIndex = text.length
+                    }
+
+                    var codeStartIndex = targetIndex
+                    while (codeStartIndex < text.length && (text[codeStartIndex] == ' ' || text[codeStartIndex] == '\t')) {
+                        codeStartIndex++
+                    }
+                    val finalCursorPos = if (codeStartIndex < text.length && text[codeStartIndex] != '\n') codeStartIndex else targetIndex
+
+                    textFieldValue = textFieldValue.copy(selection = TextRange(finalCursorPos.coerceIn(0, text.length)))
+                }
+
+                focusRequester.requestFocus()
+                keyboardController?.show()
+            }
+
+            // Auto input follow: Smoothly scroll to keep active line and cursor in view when navigating or tapping lines
+            val activeLine = currentLineAndCol.first
+            LaunchedEffect(activeLine) {
+                if (activeLine > 0 && lineHeightPx > 0f) {
+                    val lineTopPx = ((activeLine - 1) * lineHeightPx).toInt()
+                    val viewportHeight = scrollState.viewportSize
+                    if (viewportHeight > 0) {
+                        val currentScroll = scrollState.value
+                        val lineBottomPx = lineTopPx + lineHeightPx.toInt()
+                        if (lineTopPx < currentScroll) {
+                            val desiredScroll = (lineTopPx - (lineHeightPx * 2).toInt()).coerceAtLeast(0)
+                            scrollState.animateScrollTo(desiredScroll)
+                        } else if (lineBottomPx > currentScroll + viewportHeight) {
+                            val desiredScroll = (lineBottomPx - viewportHeight + (lineHeightPx * 2).toInt()).coerceAtLeast(0)
+                            scrollState.animateScrollTo(desiredScroll)
+                        }
+                    }
+                }
+            }
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .background(DiscordBackground)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        focusRequester.requestFocus()
-                        keyboardController?.show()
-                        textFieldValue = textFieldValue.copy(selection = TextRange(textFieldValue.text.length))
-                    }
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             do {
@@ -1348,10 +1488,16 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 color = DiscordHover,
                                 shape = RoundedCornerShape(0.dp)
                             )
+                            .pointerInput(lineCount, lineHeightPx) {
+                                detectTapGestures { offset ->
+                                    val tappedLine = ((offset.y / lineHeightPx).toInt() + 1).coerceIn(1, lineCount)
+                                    moveCursorToLine(tappedLine)
+                                }
+                            }
                             .padding(top = 4.dp, bottom = 4.dp, start = 4.dp, end = 4.dp),
                         contentAlignment = Alignment.TopEnd
                     ) {
-                        if (lineCount <= 200) {
+                        if (lineCount <= 80) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalAlignment = Alignment.End
@@ -1363,7 +1509,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.End,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) {
+                                                moveCursorToLine(i)
+                                            }
                                     ) {
                                         if (hasError) {
                                             Text(
@@ -1408,7 +1561,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         }
                     }
 
-                    // Editor content text field with direct touch access
+                    // Editor content text field with direct touch access, long-press paste, and line auto-focusing
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -1434,7 +1587,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.None,
                                 autoCorrectEnabled = false,
-                                keyboardType = KeyboardType.Ascii,
+                                keyboardType = KeyboardType.Text,
                                 imeAction = ImeAction.None
                             ),
                             modifier = Modifier
@@ -1565,60 +1718,22 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Zoom In / Out Controls
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    // Pinch Zoom Indicator Badge (no click +/- buttons; operated via pinch-to-zoom)
+                    Surface(
+                        color = if (fontScale != 1.0f) DiscordBlurple.copy(alpha = 0.2f) else DiscordHover,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier
+                            .clickable { fontScale = 1.0f }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .testTag("badge_editor_pinch_zoom")
                     ) {
-                        Surface(
-                            color = DiscordHover,
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier
-                                .clickable {
-                                    fontScale = (fontScale - 0.1f).coerceIn(0.65f, 2.5f)
-                                }
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "－",
-                                color = DiscordTextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Surface(
-                            color = if (fontScale != 1.0f) DiscordBlurple.copy(alpha = 0.2f) else Color.Transparent,
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier
-                                .clickable { fontScale = 1.0f }
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "${(fontScale * 100).toInt()}%",
-                                color = if (fontScale != 1.0f) DiscordBlurple else DiscordTextMuted,
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-
-                        Surface(
-                            color = DiscordHover,
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier
-                                .clickable {
-                                    fontScale = (fontScale + 0.1f).coerceIn(0.65f, 2.5f)
-                                }
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "＋",
-                                color = DiscordTextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        Text(
+                            text = "🔍 ${(fontScale * 100).toInt()}%",
+                            color = if (fontScale != 1.0f) DiscordBlurple else DiscordTextSecondary,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     val isPm2Online = pm2Processes.any { it.status == com.example.engine.Pm2Status.ONLINE }
