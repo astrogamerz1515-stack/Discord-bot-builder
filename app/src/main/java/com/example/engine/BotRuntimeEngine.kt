@@ -166,6 +166,12 @@ class BotRuntimeEngine(
         BotCodeExecutor.invalidateCache(projectId ?: currentProjectId)
     }
 
+    fun updateCachedFiles(projectId: Long, files: List<BotFile>) {
+        cachedFiles = files
+        cachedProjectId = projectId
+        BotCodeExecutor.invalidateCache(projectId)
+    }
+
     /**
      * Non-blocking asynchronous terminal logging. Writes to SQLite on Dispatchers.IO
      * without blocking the incoming message dispatch or REST reply!
@@ -286,9 +292,15 @@ class BotRuntimeEngine(
     /**
      * Starts the bot. If real token is present, initiates the real Discord Gateway v10 WebSocket.
      */
-    fun startBot(project: BotProject) {
+    fun startBot(project: BotProject, initialFiles: List<BotFile>? = null) {
         val cleanToken = sanitizeToken(project.botToken)
         val hasRealToken = isRealToken(cleanToken)
+
+        if (initialFiles != null) {
+            cachedFiles = initialFiles
+            cachedProjectId = project.id
+            BotCodeExecutor.invalidateCache(project.id)
+        }
 
         // Ensure Android foreground service and system locks are guarding the bot 24/7
         BotRuntimeManager.appContext?.let { ctx ->
@@ -298,6 +310,7 @@ class BotRuntimeEngine(
         }
 
         if (_isRunning.value && currentProjectId == project.id) {
+            hotReload(project.id)
             if (hasRealToken && !_isRealDiscordConnected.value && !isConnectingGateway.get()) {
                 scope.launch(Dispatchers.IO) {
                     connectRealDiscordGateway(project, isResumeAttempt = sessionId != null)
@@ -314,9 +327,11 @@ class BotRuntimeEngine(
         scope.launch(Dispatchers.IO) {
             // Pre-cache files in memory for fast zero-latency command parsing
             try {
-                val files = repository.getFilesDirect(project.id)
-                cachedFiles = files
-                cachedProjectId = project.id
+                if (cachedFiles == null || cachedProjectId != project.id) {
+                    val files = repository.getFilesDirect(project.id)
+                    cachedFiles = files
+                    cachedProjectId = project.id
+                }
             } catch (e: Exception) {}
 
             logAsync(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
@@ -1096,9 +1111,23 @@ class BotRuntimeEngine(
         result: BotExecutionResult,
         project: BotProject
     ) = withContext(Dispatchers.IO) {
+        val embedJson = if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+            JSONObject().apply {
+                if (!result.embedTitle.isNullOrBlank()) put("title", result.embedTitle)
+                if (!result.embedDescription.isNullOrBlank()) put("description", result.embedDescription)
+                result.embedColorHex?.let {
+                    val colorInt = try { it.removePrefix("#").toInt(16) } catch (e: Exception) { 5793266 }
+                    put("color", colorInt)
+                }
+                if (!result.embedAuthor.isNullOrBlank()) put("author", JSONObject().put("name", result.embedAuthor))
+                if (!result.embedFooter.isNullOrBlank()) put("footer", JSONObject().put("text", result.embedFooter))
+            }
+        } else null
+
         val responseJson = DiscordInteractionHandler.createMessageResponse(
             content = result.replyText,
-            ephemeral = false
+            ephemeral = false,
+            embed = embedJson
         )
         val (code, _) = restClient.execute(
             token = project.botToken,
@@ -1112,19 +1141,28 @@ class BotRuntimeEngine(
     }
 
     /**
-     * Registers slash commands globally on Discord.
+     * Registers slash commands globally on Discord, dynamically including all commands declared in user source code.
      */
     suspend fun registerSlashCommandsToDiscord(project: BotProject) = withContext(Dispatchers.IO) {
+        val files = cachedFiles ?: repository.getFilesDirect(project.id)
+        val allCode = files.joinToString("\n\n") { it.content }
+        val customCommands = BotCodeExecutor.extractAllCommandNames(allCode)
+
+        val builtIns = setOf("ping", "help", "embed", "userinfo", "roll")
+        val allCommandsToRegister = (builtIns + customCommands).filter { it.isNotBlank() }
+
         val commandsArray = JSONArray().apply {
-            put(JSONObject().apply { put("name", "ping"); put("description", "Check latency"); put("type", 1) })
-            put(JSONObject().apply { put("name", "help"); put("description", "Show commands list"); put("type", 1) })
-            put(JSONObject().apply { put("name", "embed"); put("description", "Display a rich embed"); put("type", 1) })
-            put(JSONObject().apply { put("name", "userinfo"); put("description", "Show user profile stats"); put("type", 1) })
-            put(JSONObject().apply { put("name", "roll"); put("description", "Roll 1-100"); put("type", 1) })
+            for (cmd in allCommandsToRegister) {
+                put(JSONObject().apply {
+                    put("name", cmd)
+                    put("description", "Execute /$cmd")
+                    put("type", 1)
+                })
+            }
         }
 
         val (success, msg) = restClient.registerGlobalCommands(project.botToken, project.clientId, commandsArray)
-        repository.addTerminalLog(project.id, "[COMMANDS] $msg", if (success) "SUCCESS" else "WARN")
+        repository.addTerminalLog(project.id, "[COMMANDS] $msg (${commandsArray.length()} commands registered)", if (success) "SUCCESS" else "WARN")
     }
 
     /**

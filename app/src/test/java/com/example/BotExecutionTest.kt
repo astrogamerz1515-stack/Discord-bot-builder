@@ -210,4 +210,87 @@ class BotExecutionTest {
         assertNotNull(inIdSuggestion)
         assertEquals("omBotHelper", inIdSuggestion!!.completionText)
     }
+
+    @Test
+    fun testCustomSlashCommandWithNestedEmbed() = runBlocking {
+        val project = BotProject(name = "CustomBot", description = "Test", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 2,
+                filePath = "index.js",
+                isEntrypoint = true,
+                content = """
+                    client.on('interactionCreate', async (interaction) => {
+                        if (interaction.commandName === 'serverinfo') {
+                            const embed = new EmbedBuilder()
+                                .setTitle('My Custom Server Info')
+                                .setDescription('Welcome to our community!')
+                                .setColor(0x57F287)
+                                .setFooter({ text: 'Custom System' });
+                            await interaction.reply({ embeds: [embed] });
+                        }
+                    });
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "/serverinfo",
+            authorUsername = "AdminUser",
+            authorId = "99999",
+            project = project,
+            files = files,
+            gatewayPingMs = 15
+        )
+
+        assertTrue(result.isHandled)
+        assertEquals("My Custom Server Info", result.embedTitle)
+        assertEquals("Welcome to our community!", result.embedDescription)
+        assertEquals("Custom System", result.embedFooter)
+    }
+
+    @Test
+    fun testUserCustomPingOverridesBuiltin() = runBlocking {
+        val project = BotProject(name = "CustomPingBot", description = "Test", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 3,
+                filePath = "index.js",
+                isEntrypoint = true,
+                content = """
+                    client.on('messageCreate', (message) => {
+                        if (message.content === '!ping') {
+                            message.reply('My custom pong response 123!');
+                        }
+                    });
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!ping",
+            authorUsername = "Tester",
+            authorId = "111",
+            project = project,
+            files = files,
+            gatewayPingMs = 20
+        )
+
+        assertTrue(result.isHandled)
+        assertEquals("My custom pong response 123!", result.replyText)
+    }
+
+    @Test
+    fun testBalancedBlockExtractorHandlesNestedObjects() {
+        val code = """
+            if (commandName === 'test') {
+                const config = { opt: { deep: true }, text: 'inside' };
+                await interaction.reply('Finished test!');
+            }
+        """.trimIndent()
+        val body = BotCodeExecutor.extractBalancedBlock(code, 0)
+        assertTrue(body.contains("Finished test!"))
+        assertTrue(body.contains("deep: true"))
+    }
 }
+

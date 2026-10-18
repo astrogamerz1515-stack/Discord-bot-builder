@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -75,6 +76,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
@@ -93,6 +95,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -173,6 +176,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showFindReplaceBar by remember { mutableStateOf(false) }
+    var showGoToLineDialog by remember { mutableStateOf(false) }
     var inlineDismissedOffset by remember { mutableIntStateOf(-1) }
 
     // Find & Replace Search State
@@ -210,14 +214,65 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     var zoomToastJob by remember { mutableStateOf<Job?>(null) }
     val editorScope = rememberCoroutineScope()
 
+    val density = LocalDensity.current
     val currentFontSize = (13f * fontScale).sp
     val currentLineHeight = (20f * fontScale).sp
+    val currentLineHeightDp = with(density) { currentLineHeight.toDp() }
+    val lineHeightPx = with(density) { currentLineHeight.toPx() }
 
     // Synchronize TextFieldValue with file content and track cursor
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(fileContent, TextRange(fileContent.length)))
     }
     var lastEditorText by remember { mutableStateOf(fileContent) }
+
+    // High-performance allocation-free line count calculation
+    val lineCount = remember(textFieldValue.text) {
+        val text = textFieldValue.text
+        var count = 1
+        for (i in 0 until text.length) {
+            if (text[i] == '\n') count++
+        }
+        count
+    }
+
+    // Move cursor to specific line, request focus and open keyboard without modifying zoom
+    val moveCursorToLine: (Int) -> Unit = { targetLine ->
+        val text = textFieldValue.text
+        if (text.isEmpty()) {
+            textFieldValue = textFieldValue.copy(selection = TextRange(0))
+        } else {
+            var currentLine = 1
+            var targetIndex = 0
+            for (i in text.indices) {
+                if (currentLine == targetLine) {
+                    targetIndex = i
+                    break
+                }
+                if (text[i] == '\n') {
+                    currentLine++
+                    if (currentLine == targetLine) {
+                        targetIndex = i + 1
+                        break
+                    }
+                }
+            }
+            if (currentLine < targetLine) {
+                targetIndex = text.length
+            }
+
+            var codeStartIndex = targetIndex
+            while (codeStartIndex < text.length && (text[codeStartIndex] == ' ' || text[codeStartIndex] == '\t')) {
+                codeStartIndex++
+            }
+            val finalCursorPos = if (codeStartIndex < text.length && text[codeStartIndex] != '\n') codeStartIndex else targetIndex
+
+            textFieldValue = textFieldValue.copy(selection = TextRange(finalCursorPos.coerceIn(0, text.length)))
+        }
+
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
 
     // Ensure an active file is selected whenever files exist but activeFile is null
     LaunchedEffect(files, activeFile) {
@@ -612,6 +667,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(DiscordBackground)
+            .imePadding()
     ) {
         // Top File Tabs & Actions Row
         Row(
@@ -714,11 +770,52 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
             Spacer(modifier = Modifier.width(6.dp))
 
+            // When running: provide Reload button to apply new code instantly without disconnecting Gateway
+            if (isRunning) {
+                Button(
+                    onClick = {
+                        viewModel.updateActiveFileContent(textFieldValue.text)
+                        viewModel.saveActiveFile()
+                        viewModel.hotReload()
+                        Toast.makeText(context, "🔥 Applied editor code to active bot!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = DiscordBlurple
+                    ),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .height(32.dp)
+                        .testTag("btn_quick_reload_bot")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reload Bot Code",
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = "Reload",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+
             // Quick Run / Stop button
             Button(
                 onClick = {
-                    if (isRunning) viewModel.stopBotProcess()
-                    else viewModel.startBotProcess()
+                    if (isRunning) {
+                        viewModel.stopBotProcess()
+                    } else {
+                        viewModel.updateActiveFileContent(textFieldValue.text)
+                        viewModel.saveActiveFile()
+                        viewModel.startBotProcess()
+                        Toast.makeText(context, "🟢 Bot running with your editor code!", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isRunning) DiscordRed else DiscordGreen
@@ -1346,16 +1443,8 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
         } else {
-            // High-performance allocation-free line count calculation
-            val lineCount = remember(textFieldValue.text) {
-                val text = textFieldValue.text
-                var count = 1
-                for (i in 0 until text.length) {
-                    if (text[i] == '\n') count++
-                }
-                count
-            }
             val scrollState = rememberScrollState()
+            val horizontalScrollState = rememberScrollState()
 
             val displayLineCount = minOf(lineCount, 5000)
             val lineNumbersString = remember(displayLineCount, lineCount) {
@@ -1370,63 +1459,44 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 sb.toString()
             }
 
-            val horizontalScrollState = rememberScrollState()
-            val density = LocalDensity.current
-            val lineHeightPx = with(density) { currentLineHeight.toPx() }
-
-            // Move cursor to specific line, request focus and open keyboard without modifying zoom
-            val moveCursorToLine: (Int) -> Unit = { targetLine ->
-                val text = textFieldValue.text
-                if (text.isEmpty()) {
-                    textFieldValue = textFieldValue.copy(selection = TextRange(0))
-                } else {
-                    var currentLine = 1
-                    var targetIndex = 0
-                    for (i in text.indices) {
-                        if (currentLine == targetLine) {
-                            targetIndex = i
-                            break
-                        }
-                        if (text[i] == '\n') {
-                            currentLine++
-                            if (currentLine == targetLine) {
-                                targetIndex = i + 1
-                                break
-                            }
-                        }
-                    }
-                    if (currentLine < targetLine) {
-                        targetIndex = text.length
-                    }
-
-                    var codeStartIndex = targetIndex
-                    while (codeStartIndex < text.length && (text[codeStartIndex] == ' ' || text[codeStartIndex] == '\t')) {
-                        codeStartIndex++
-                    }
-                    val finalCursorPos = if (codeStartIndex < text.length && text[codeStartIndex] != '\n') codeStartIndex else targetIndex
-
-                    textFieldValue = textFieldValue.copy(selection = TextRange(finalCursorPos.coerceIn(0, text.length)))
-                }
-
-                focusRequester.requestFocus()
-                keyboardController?.show()
-            }
-
-            // Auto input follow: Smoothly scroll to keep active line and cursor in view when navigating or tapping lines
+            // Caret Tracker & Bidirectional Auto-Scroll: Keeps caret and active line smoothly in view
             val activeLine = currentLineAndCol.first
-            LaunchedEffect(activeLine) {
+            val activeCol = currentLineAndCol.second
+            val charWidthPx = with(density) { (currentFontSize.value * 0.62f).sp.toPx() }
+
+            LaunchedEffect(cursorPosition, activeLine, activeCol, fontScale, scrollState.viewportSize, horizontalScrollState.viewportSize) {
                 if (activeLine > 0 && lineHeightPx > 0f) {
                     val lineTopPx = ((activeLine - 1) * lineHeightPx).toInt()
-                    val viewportHeight = scrollState.viewportSize
-                    if (viewportHeight > 0) {
-                        val currentScroll = scrollState.value
-                        val lineBottomPx = lineTopPx + lineHeightPx.toInt()
-                        if (lineTopPx < currentScroll) {
-                            val desiredScroll = (lineTopPx - (lineHeightPx * 2).toInt()).coerceAtLeast(0)
-                            scrollState.animateScrollTo(desiredScroll)
-                        } else if (lineBottomPx > currentScroll + viewportHeight) {
-                            val desiredScroll = (lineBottomPx - viewportHeight + (lineHeightPx * 2).toInt()).coerceAtLeast(0)
-                            scrollState.animateScrollTo(desiredScroll)
+                    val lineBottomPx = lineTopPx + lineHeightPx.toInt()
+                    val vViewport = scrollState.viewportSize
+                    if (vViewport > 0) {
+                        val currentVScroll = scrollState.value
+                        val topThreshold = (vViewport * 0.18f).toInt().coerceAtLeast(lineHeightPx.toInt())
+                        val bottomThreshold = (vViewport * 0.28f).toInt().coerceAtLeast((lineHeightPx * 2).toInt())
+
+                        if (lineTopPx < currentVScroll + topThreshold) {
+                            val targetVScroll = (lineTopPx - topThreshold).coerceAtLeast(0)
+                            scrollState.animateScrollTo(targetVScroll)
+                        } else if (lineBottomPx > currentVScroll + vViewport - bottomThreshold) {
+                            val targetVScroll = (lineBottomPx - vViewport + bottomThreshold).coerceAtLeast(0)
+                            scrollState.animateScrollTo(targetVScroll)
+                        }
+                    }
+
+                    // Horizontal caret tracking
+                    val hViewport = horizontalScrollState.viewportSize
+                    if (hViewport > 0 && charWidthPx > 0f) {
+                        val caretXPx = ((activeCol - 1) * charWidthPx).toInt()
+                        val currentHScroll = horizontalScrollState.value
+                        val leftThreshold = with(density) { 50.dp.toPx() }.toInt()
+                        val rightThreshold = with(density) { 90.dp.toPx() }.toInt()
+
+                        if (caretXPx < currentHScroll + leftThreshold) {
+                            val targetHScroll = (caretXPx - leftThreshold).coerceAtLeast(0)
+                            horizontalScrollState.animateScrollTo(targetHScroll)
+                        } else if (caretXPx > currentHScroll + hViewport - rightThreshold) {
+                            val targetHScroll = (caretXPx - hViewport + rightThreshold).coerceAtLeast(0)
+                            horizontalScrollState.animateScrollTo(targetHScroll)
                         }
                     }
                 }
@@ -1497,6 +1567,26 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             .padding(top = 4.dp, bottom = 4.dp, start = 4.dp, end = 4.dp),
                         contentAlignment = Alignment.TopEnd
                     ) {
+                        // Gutter Caret Tracker Indicator (Active Line Highlight in Gutter)
+                        if (activeLine in 1..lineCount) {
+                            val gutterLineTop = with(density) { ((activeLine - 1) * lineHeightPx).toDp() }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = gutterLineTop)
+                                    .height(currentLineHeightDp)
+                                    .background(DiscordBlurple.copy(alpha = 0.18f), RoundedCornerShape(2.dp))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .width(3.dp)
+                                        .height(currentLineHeightDp)
+                                        .background(DiscordBlurple, RoundedCornerShape(1.dp))
+                                )
+                            }
+                        }
+
                         if (lineCount <= 80) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1569,6 +1659,26 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             .horizontalScroll(horizontalScrollState)
                             .padding(top = 4.dp, bottom = 4.dp, start = 8.dp, end = 8.dp)
                     ) {
+                        // Editor Caret Tracker: Active Line Background Highlight
+                        if (activeLine in 1..lineCount) {
+                            val activeLineTop = with(density) { ((activeLine - 1) * lineHeightPx).toDp() }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = activeLineTop)
+                                    .height(currentLineHeightDp)
+                                    .background(
+                                        color = DiscordBlurple.copy(alpha = 0.08f),
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = DiscordBlurple.copy(alpha = 0.22f),
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+
                         BasicTextField(
                             value = textFieldValue,
                             onValueChange = { newValue ->
@@ -1658,12 +1768,27 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "Ln ${currentLineAndCol.first}, Col ${currentLineAndCol.second}",
-                        color = DiscordTextSecondary,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .clickable { showGoToLineDialog = true }
+                            .testTag("btn_caret_tracker_metric")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "🎯 Ln ${currentLineAndCol.first}, Col ${currentLineAndCol.second}",
+                                color = DiscordBlurple,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
                     Text(
                         text = "•",
@@ -2239,6 +2364,70 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
+
+    // Go To Line (Caret Tracker Jump) Dialog
+    if (showGoToLineDialog) {
+        var inputLine by remember { mutableStateOf("${currentLineAndCol.first}") }
+        AlertDialog(
+            onDismissRequest = { showGoToLineDialog = false },
+            containerColor = DiscordSurface,
+            title = {
+                Text(
+                    text = "🎯 Caret Tracker • Go to Line",
+                    color = DiscordTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Current Caret: Line ${currentLineAndCol.first}, Column ${currentLineAndCol.second} (Total: $lineCount lines)",
+                        color = DiscordTextSecondary,
+                        fontSize = 12.sp
+                    )
+                    OutlinedTextField(
+                        value = inputLine,
+                        onValueChange = { inputLine = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Line Number (1 - $lineCount)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = DiscordBlurple,
+                            focusedLabelColor = DiscordBlurple,
+                            unfocusedBorderColor = DiscordHover,
+                            focusedTextColor = DiscordTextPrimary,
+                            unfocusedTextColor = DiscordTextPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_goto_line")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = inputLine.toIntOrNull()
+                        if (target != null && target in 1..lineCount) {
+                            moveCursorToLine(target)
+                            showGoToLineDialog = false
+                        } else {
+                            Toast.makeText(context, "Please enter a valid line between 1 and $lineCount", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
+                ) {
+                    Text("Go to Line", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoToLineDialog = false }) {
+                    Text("Cancel", color = DiscordTextSecondary)
+                }
+            }
+        )
     }
 }
 

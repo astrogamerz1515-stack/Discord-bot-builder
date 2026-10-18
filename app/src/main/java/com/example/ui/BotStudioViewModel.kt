@@ -294,7 +294,14 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateActiveFileContent(newContent: String) {
         _activeFileContent.value = newContent
-        _activeFile.value = _activeFile.value?.copy(content = newContent)
+        val currentFile = _activeFile.value
+        if (currentFile != null) {
+            val updatedFile = currentFile.copy(content = newContent)
+            _activeFile.value = updatedFile
+            val currentFiles = _projectFiles.value.map { if (it.id == updatedFile.id) updatedFile else it }
+            _projectFiles.value = currentFiles
+            runtimeEngine.updateCachedFiles(updatedFile.projectId, currentFiles)
+        }
 
         // Smooth background debounced linting to prevent typing stutter
         diagnosticsJob?.cancel()
@@ -363,16 +370,21 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveActiveFile() {
         val file = _activeFile.value ?: return
         val currentContent = _activeFileContent.value
-        runtimeEngine.invalidateFileCache(file.projectId)
-        viewModelScope.launch {
-            val updatedFile = file.copy(content = currentContent)
+        val updatedFile = file.copy(content = currentContent)
+        _activeFile.value = updatedFile
+
+        // Update in-memory project files immediately
+        val currentFiles = _projectFiles.value.map { if (it.id == updatedFile.id) updatedFile else it }
+        _projectFiles.value = currentFiles
+
+        // Push immediately into runtime engine in-memory cache to guarantee zero-latency hot reload
+        runtimeEngine.updateCachedFiles(file.projectId, currentFiles)
+
+        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        _saveStatus.value = "Saved at $timeStr"
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             repository.saveFile(updatedFile)
-            // CRITICAL: Only update _activeFile.value if the user hasn't switched to another file
-            if (_activeFile.value?.id == updatedFile.id) {
-                _activeFile.value = updatedFile
-                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                _saveStatus.value = "Saved at $timeStr"
-            }
         }
     }
 
@@ -807,7 +819,9 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         saveActiveFile()
         val cleanToken = runtimeEngine.sanitizeToken(project.botToken)
         val cleanProject = if (cleanToken != project.botToken) project.copy(botToken = cleanToken) else project
-        runtimeEngine.startBot(cleanProject)
+        val currentFiles = _projectFiles.value
+        runtimeEngine.updateCachedFiles(cleanProject.id, currentFiles)
+        runtimeEngine.startBot(cleanProject, currentFiles)
 
         // Run bot in background with Foreground Service and WakeLock
         try {
@@ -832,6 +846,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun restartBotProcess() {
         val project = _currentProject.value ?: return
         saveActiveFile()
+        val currentFiles = _projectFiles.value
+        runtimeEngine.updateCachedFiles(project.id, currentFiles)
         runtimeEngine.restartBot(project)
     }
 
@@ -843,6 +859,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun hotReload() {
         val project = _currentProject.value ?: return
         saveActiveFile()
+        val currentFiles = _projectFiles.value
+        runtimeEngine.updateCachedFiles(project.id, currentFiles)
         runtimeEngine.hotReload(project.id)
     }
 
