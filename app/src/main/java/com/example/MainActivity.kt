@@ -36,7 +36,6 @@ class MainActivity : ComponentActivity() {
     BotRuntimeManager.appContext = applicationContext
 
     requestNotificationPermissionIfNeeded()
-    requestBatteryOptimizationIgnoreIfNeeded()
 
     setContent {
       MyApplicationTheme {
