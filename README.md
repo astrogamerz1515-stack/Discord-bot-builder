@@ -282,10 +282,14 @@
 ### 1. Using GitHub Actions (Automated CI/CD)
 This repository includes a ready-to-run GitHub Actions workflow (`.github/workflows/build-apk.yml`).
 
-1. Push your repository to GitHub.
-2. In your GitHub repository, navigate to the **Actions** tab.
-3. Select **Build Android APK** and click **Run workflow** (or simply push to `main` / `master`).
-4. Once completed, download the generated APK (`BotStudio-debug-apk.zip`) from the **Artifacts** section at the bottom of the run summary.
+1. Navigate to the **Actions** tab
+2. Click on **Build android apk** 
+3. Click on the latest (upper) file which has a green tick 
+4. Navigate and click on **Artifacts** option.
+5. Navigate to the bottom and you should see the **bot debug apk** ,on its right side u should see the download icon
+
+6. Click on that and download the file 
+7. Extract the file and download the apk and enjoy coding!
 
 ### 2. Building Locally with Gradle
 ```bash
