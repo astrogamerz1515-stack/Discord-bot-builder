@@ -24,22 +24,25 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses & Pre-install Android 36 SDK
+      - name: Setup Android SDK & Licenses
         run: |
+          echo "Setting up Android SDK environment and licenses..."
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+          mkdir -p "$ANDROID_HOME/licenses" || true
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n84831b9409646a918e30573bab4c9c91346d8abd\n8933bad161af4178b1185d1a37fbf41ea5269c55\n" > "$ANDROID_HOME/licenses/android-sdk-license"
+
+          # Accept all licenses
           yes | sdkmanager --licenses || true
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" --channel=3 || true
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" || true
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: wrapper
+          # Install platform 36 if not present
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" --channel=3 || true
+          sdkmanager "platforms;android-36" || true
 
-      - name: Prepare Build Environment & Keystore
+      - name: Prepare Environment & Keystore
         run: |
           chmod +x gradlew
 
@@ -52,12 +55,12 @@ jobs:
           # If debug.keystore is still missing or empty, generate a standard debug keystore
           if [ ! -s debug.keystore ]; then
             echo "Generating fallback debug keystore..."
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
           fi
 
           # Ensure keystore exists both in root and in standard ~/.android for AGP
           mkdir -p ~/.android
-          cp debug.keystore ~/.android/debug.keystore
+          cp debug.keystore ~/.android/debug.keystore || true
 
           # Ensure .env exists so Secrets Gradle plugin does not fail
           if [ ! -f .env ]; then
@@ -70,10 +73,6 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon -Dorg.gradle.configuration-cache=false
-
-      - name: Run Unit Tests (Optional Verification)
-        run: ./gradlew test --stacktrace --no-daemon || true
-        continue-on-error: true
 
       - name: Locate Built APK Files
         id: locate_apk

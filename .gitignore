@@ -15,9 +15,8 @@
 .cxx
 local.properties
 .env
-debug.keystore
-
-# Allow debug.keystore.base64 so GitHub Actions can recreate debug.keystore
+# Allow debug keystores for CI builds
+!debug.keystore
 !debug.keystore.base64
 !.env.example
 

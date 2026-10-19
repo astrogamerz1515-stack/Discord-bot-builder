@@ -19,32 +19,41 @@ android {
         buildConfigField("String", "GEMINI_API_KEY", "\"\"")
     }
 
+    val keystoreFile = rootProject.file("debug.keystore")
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
         create("debugConfig") {
-            storeFile = rootProject.file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (keystoreFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            if (keystoreFile.exists()) {
+                signingConfig = signingConfigs.getByName("debugConfig")
+            }
         }
     }
     compileOptions {
