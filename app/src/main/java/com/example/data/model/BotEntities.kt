@@ -13,10 +13,14 @@ enum class BotLanguage(
     JAVASCRIPT("JavaScript (discord.js)", "js", "Node.js v20", "javascript", "index.js"),
     TYPESCRIPT("TypeScript (discord.js)", "ts", "Node.js + ts-node", "typescript", "src/index.ts"),
     PYTHON("Python (discord.py)", "py", "Python 3.11", "python", "bot.py"),
+    LUA("Lua (discordia)", "lua", "Lua 5.4", "lua", "bot.lua"),
     RUST("Rust (serenity)", "rs", "Rust 1.76", "rust", "src/main.rs"),
     GO("Go (discordgo)", "go", "Go 1.22", "go", "main.go"),
     JAVA("Java (JDA)", "java", "OpenJDK 21", "java", "src/Main.java"),
-    CSHARP("C# (Discord.Net)", "cs", ".NET 8.0", "csharp", "Program.cs")
+    CSHARP("C# (Discord.Net)", "cs", ".NET 8.0", "csharp", "Program.cs"),
+    SHELL("Bash / Shell", "sh", "Bash 5.2", "shell", "start.sh"),
+    RUBY("Ruby (discordrb)", "rb", "Ruby 3.2", "ruby", "bot.rb"),
+    KOTLIN("Kotlin (Kord)", "kt", "Kotlin 2.0", "kotlin", "src/Bot.kt")
 }
 
 @Entity(tableName = "bot_projects")

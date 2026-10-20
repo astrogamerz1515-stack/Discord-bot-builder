@@ -278,103 +278,8 @@ node index.js
             )
         )
 
-        // 2. Second Template: Python discord.py 2.x
-        val pyProjectId = projectDao.insertProject(
-            BotProject(
-                name = "Kitsune Python Bot",
-                description = "Modern Python Discord bot using discord.py 2.3 with cogs, slash commands (app_commands), and interactive UI views.",
-                language = BotLanguage.PYTHON.name,
-                prefix = "?",
-                botToken = "OTg3NjU0MzIxMDk4NzY1NDMyMQ.G-PythonBotTokenExample",
-                clientId = "987654321098765432",
-                status = "Online",
-                activityType = "PLAYING",
-                activityText = "?help | discord.py v2.3",
-                intentMessageContent = true,
-                intentGuildMembers = true,
-                intentPresences = false
-            )
-        )
 
-        fileDao.insertFiles(
-            listOf(
-                BotFile(
-                    projectId = pyProjectId,
-                    filePath = "bot.py",
-                    isEntrypoint = true,
-                    content = """import os
-import discord
-from discord import app_commands
-from discord.ext import commands
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# Discord Intents configuration
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="?", intents=intents)
-
-# Interactive UI View with Buttons
-class ActionView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="Click Me!", style=discord.ButtonStyle.primary, emoji="🦊")
-    async def button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        button.disabled = True
-        button.label = "Claimed!"
-        await interaction.response.edit_message(content="🎉 You pressed the button!", view=self)
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name} (ID: {bot.user.id})")
-    print(f"Loaded discord.py version: {discord.__version__}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands globally")
-    except Exception as e:
-        print(f"Slash command sync error: {e}")
-
-@bot.tree.command(name="ping", description="Check bot latency")
-async def ping(interaction: discord.Interaction):
-    latency = round(bot.latency * 1000)
-    embed = discord.Embed(
-        title="🏓 Pong!",
-        description=f"Gateway WebSocket Latency: **{latency}ms**",
-        color=discord.Color.brand_green()
-    )
-    embed.add_field(name="Language", value="Python 3.11", inline=True)
-    embed.add_field(name="Library", value="discord.py", inline=True)
-    await interaction.response.send_message(embed=embed, view=ActionView())
-
-@bot.command()
-async def hello(ctx):
-    await ctx.reply(f"Hello {ctx.author.mention}! 🦊 I am running discord.py!")
-
-if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    bot.run(token)
-"""
-                ),
-                BotFile(
-                    projectId = pyProjectId,
-                    filePath = "requirements.txt",
-                    content = """discord.py>=2.3.2
-python-dotenv>=1.0.1
-aiohttp>=3.9.0"""
-                ),
-                BotFile(
-                    projectId = pyProjectId,
-                    filePath = ".env",
-                    content = """DISCORD_TOKEN=OTg3NjU0MzIxMDk4NzY1NDMyMQ.G-PythonBotTokenExample
-CLIENT_ID=987654321098765432
-PREFIX=?"""
-                )
-            )
-        )
     }
 
     fun getTemplateForLanguage(language: BotLanguage, projectName: String): List<BotFile> {
@@ -762,6 +667,128 @@ class Program
     <PackageReference Include="Discord.Net" Version="3.14.1" />
   </ItemGroup>
 </Project>"""
+                )
+            )
+
+            BotLanguage.LUA -> listOf(
+                BotFile(
+                    projectId = 0,
+                    filePath = "bot.lua",
+                    isEntrypoint = true,
+                    content = """local discordia = require('discordia')
+local client = discordia.Client()
+
+client:on('ready', function()
+    print(string.format('Logged in as %s', client.user.username))
+end)
+
+client:on('messageCreate', function(message)
+    if message.author.bot then return end
+    if message.content == '!ping' then
+        message:reply('🏓 Pong from Lua Discordia!')
+    end
+end)
+
+client:run('Bot ' .. (os.getenv('DISCORD_TOKEN') or 'YOUR_BOT_TOKEN_HERE'))
+"""
+                ),
+                BotFile(
+                    projectId = 0,
+                    filePath = ".env",
+                    content = "DISCORD_TOKEN=YOUR_BOT_TOKEN_HERE\nPREFIX=!"
+                )
+            )
+
+            BotLanguage.SHELL -> listOf(
+                BotFile(
+                    projectId = 0,
+                    filePath = "start.sh",
+                    isEntrypoint = true,
+                    content = """#!/bin/bash
+# Multi-language Bot Runner & Monitor
+echo "🚀 Starting Multi-Language Bot Studio Engine..."
+node index.js &
+wait
+"""
+                ),
+                BotFile(
+                    projectId = 0,
+                    filePath = "index.js",
+                    content = """const { Client, GatewayIntentBits } = require('discord.js');
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+
+client.on('messageCreate', (msg) => {
+  if (msg.content === '!ping') msg.reply('🏓 Pong from Shell/Node Bot!');
+});
+client.login(process.env.DISCORD_TOKEN);
+"""
+                ),
+                BotFile(
+                    projectId = 0,
+                    filePath = ".env",
+                    content = "DISCORD_TOKEN=YOUR_BOT_TOKEN_HERE\nPREFIX=!"
+                )
+            )
+
+            BotLanguage.RUBY -> listOf(
+                BotFile(
+                    projectId = 0,
+                    filePath = "bot.rb",
+                    isEntrypoint = true,
+                    content = """require 'discordrb'
+
+bot = Discordrb::Commands::CommandBot.new token: ENV['DISCORD_TOKEN'], prefix: '!'
+
+bot.command :ping do |event|
+  event.respond '🏓 Pong from Ruby discordrb!'
+end
+
+bot.run
+"""
+                ),
+                BotFile(
+                    projectId = 0,
+                    filePath = "Gemfile",
+                    content = "source 'https://rubygems.org'\ngem 'discordrb'\n"
+                )
+            )
+
+            BotLanguage.KOTLIN -> listOf(
+                BotFile(
+                    projectId = 0,
+                    filePath = "src/Bot.kt",
+                    isEntrypoint = true,
+                    content = """import dev.kord.core.Kord
+import dev.kord.core.event.message.MessageCreateEvent
+import dev.kord.core.on
+import dev.kord.gateway.Intent
+import dev.kord.gateway.PrivilegedIntent
+
+suspend fun main() {
+    val kord = Kord(System.getenv("DISCORD_TOKEN") ?: "")
+    kord.on<MessageCreateEvent> {
+        if (message.author?.isBot == true) return@on
+        if (message.content == "!ping") {
+            message.channel.createMessage("🏓 Pong from Kotlin Kord!")
+        }
+    }
+    kord.login {
+        @OptIn(PrivilegedIntent::class)
+        intents += Intent.MessageContent
+    }
+}
+"""
+                ),
+                BotFile(
+                    projectId = 0,
+                    filePath = "build.gradle.kts",
+                    content = """plugins {
+    kotlin("jvm") version "2.0.0"
+}
+dependencies {
+    implementation("dev.kord:kord-core:0.13.1")
+}
+"""
                 )
             )
         }

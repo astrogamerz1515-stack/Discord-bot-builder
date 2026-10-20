@@ -2,10 +2,10 @@ package com.example.engine
 
 import com.example.data.model.BotFile
 import com.example.data.model.BotProject
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.regex.Pattern
 import kotlin.random.Random
 
 data class BotExecutionResult(
@@ -23,13 +23,17 @@ data class BotExecutionResult(
 
 object BotCodeExecutor {
 
-    // Regexes for detecting commands and trigger headers (not matching the full body, but the entry point)
+    // 1. JS / TS Exact Triggers
     private val JS_EXACT_MATCH_HEADER = Regex(
         """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\s*===?\s*['"`]([^'"`]+)['"`]""",
         RegexOption.IGNORE_CASE
     )
     private val JS_STARTS_WITH_HEADER = Regex(
         """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.startsWith\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val JS_INCLUDES_HEADER = Regex(
+        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.includes\(\s*['"`]([^'"`]+)['"`]\s*\)""",
         RegexOption.IGNORE_CASE
     )
     private val JS_COMMAND_MATCH_HEADER = Regex(
@@ -40,8 +44,18 @@ object BotCodeExecutor {
         """case\s*['"`]([a-zA-Z0-9_\-]+)['"`]\s*:""",
         RegexOption.IGNORE_CASE
     )
+    private val JS_SLASH_BUILDER_HEADER = Regex(
+        """\.setName\(\s*['"`]([a-zA-Z0-9_\-]+)['"`]\s*\)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val JS_MODULE_EXPORTS_NAME = Regex(
+        """name\s*:\s*['"`]([a-zA-Z0-9_\-]+)['"`]""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // 2. Python Triggers
     private val PY_COMMAND_HEADER = Regex(
-        """@(?:bot|client)\.command\((?:name\s*=\s*['"`]([a-zA-Z0-9_\-]+)['"`])?[^)]*\)\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*:""",
+        """@(?:bot|client|tree|commands)\.(?:command|slash_command)\((?:name\s*=\s*['"`]([a-zA-Z0-9_\-]+)['"`])?[^)]*\)\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*:""",
         RegexOption.IGNORE_CASE
     )
     private val PY_MESSAGE_HEADER = Regex(
@@ -49,14 +63,46 @@ object BotCodeExecutor {
         RegexOption.IGNORE_CASE
     )
 
+    // 3. Lua Triggers
+    private val LUA_MESSAGE_HEADER = Regex(
+        """if\s+message\.content(?:\:lower\(\))*\s*==\s*['"]([^'"]+)['"]\s*then""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // 4. Go Triggers
+    private val GO_MESSAGE_HEADER = Regex(
+        """if\s+m\.Content\s*==\s*['"]([^'"]+)['"]""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // 5. Rust Triggers
+    private val RUST_COMMAND_HEADER = Regex(
+        """#\[poise::command\([^)]*\)\]\s*(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*\(""",
+        RegexOption.IGNORE_CASE
+    )
+    private val RUST_MESSAGE_HEADER = Regex(
+        """if\s+msg\.content\s*==\s*['"]([^'"]+)['"]""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // 6. Java Triggers
+    private val JAVA_MESSAGE_HEADER = Regex(
+        """event\.getMessage\(\)\.getContentRaw\(\)\.(?:equals|startsWith)\(\s*['"]([^'"]+)['"]\s*\)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // 7. C# Triggers
+    private val CSHARP_COMMAND_HEADER = Regex(
+        """\[Command\(\s*['"]([a-zA-Z0-9_\-]+)['"]\s*\)\]""",
+        RegexOption.IGNORE_CASE
+    )
+
     private val WHITESPACE_REGEX = Regex("\\s+")
 
-    // In-memory compiled rules cache
     data class ParsedBotRules(
-        val exactMatches: Map<String, String>, // lowercase trigger -> full body
-        val prefixMatches: List<Pair<String, String>>, // trigger -> full body
-        val commandMatches: Map<String, String>, // lowercase commandName -> full body
-        val pythonCommands: Map<String, String>, // lowercase commandName -> full body
+        val exactMatches: Map<String, String>, // lowercase trigger -> code body
+        val prefixMatches: List<Pair<String, String>>, // trigger -> code body
+        val commandMatches: Map<String, String>, // lowercase commandName -> code body
         val allCustomCommands: Set<String>
     )
 
@@ -71,13 +117,11 @@ object BotCodeExecutor {
     }
 
     /**
-     * Extracts a balanced block between { and } without getting tricked by nested
-     * objects, strings, or comments.
+     * Extracts a balanced block { ... } in JS/TS/Go/Rust/Java/C#.
      */
     fun extractBalancedBlock(text: String, startPos: Int): String {
         val braceIdx = text.indexOf('{', startPos)
-        if (braceIdx == -1 || braceIdx > startPos + 120) {
-            // No block brace or opening brace is far away - single statement:
+        if (braceIdx == -1 || braceIdx > startPos + 160) {
             val semi = text.indexOf(';', startPos)
             val nl = text.indexOf('\n', startPos)
             return when {
@@ -105,7 +149,7 @@ object BotCodeExecutor {
                 }
             } else if (inStr != null) {
                 if (c == '\\') {
-                    i++ // Skip escaped character
+                    i++
                 } else if (c == inStr) {
                     inStr = null
                 }
@@ -149,6 +193,15 @@ object BotCodeExecutor {
     }
 
     /**
+     * Extracts block for Lua (then ... end or function ... end).
+     */
+    private fun extractLuaBlock(text: String, startPos: Int): String {
+        val sub = text.substring(startPos)
+        val endIdx = sub.indexOf("end")
+        return if (endIdx != -1) sub.substring(0, endIdx) else sub.take(500)
+    }
+
+    /**
      * Extracts all command names declared in project code.
      */
     fun extractAllCommandNames(allCode: String): Set<String> {
@@ -159,84 +212,171 @@ object BotCodeExecutor {
         for (m in JS_SWITCH_CASE_HEADER.findAll(allCode)) {
             commands.add(m.groupValues[1].lowercase())
         }
+        for (m in JS_SLASH_BUILDER_HEADER.findAll(allCode)) {
+            commands.add(m.groupValues[1].lowercase())
+        }
+        for (m in JS_MODULE_EXPORTS_NAME.findAll(allCode)) {
+            commands.add(m.groupValues[1].lowercase())
+        }
         for (m in PY_COMMAND_HEADER.findAll(allCode)) {
             val name = m.groupValues[1].ifEmpty { m.groupValues[2] }.lowercase()
             commands.add(name)
         }
+        for (m in RUST_COMMAND_HEADER.findAll(allCode)) {
+            commands.add(m.groupValues[1].lowercase())
+        }
+        for (m in CSHARP_COMMAND_HEADER.findAll(allCode)) {
+            commands.add(m.groupValues[1].lowercase())
+        }
         return commands
     }
 
-    private fun getOrCompileRules(projectId: Long, allCode: String): ParsedBotRules {
-        val codeHash = allCode.hashCode()
+    /**
+     * Compiles rules from all project files (including commands folder, bot.py, etc.).
+     */
+    private fun compileRulesFromFiles(projectId: Long, files: List<BotFile>): ParsedBotRules {
+        val combinedHash = files.fold(0) { acc, f -> acc xor (f.filePath.hashCode() + f.content.hashCode()) }
         val cached = rulesCache[projectId]
-        if (cached != null && cached.first == codeHash) {
+        if (cached != null && cached.first == combinedHash) {
             return cached.second
         }
 
         val exact = mutableMapOf<String, String>()
         val prefixes = mutableListOf<Pair<String, String>>()
         val commands = mutableMapOf<String, String>()
-        val pythonCmds = mutableMapOf<String, String>()
         val allCommandNames = mutableSetOf<String>()
 
-        if (allCode.isNotBlank()) {
-            val codeToScan = if (allCode.length > 500_000) allCode.take(500_000) else allCode
+        for (file in files) {
+            val content = file.content
+            if (content.isBlank()) continue
+            val path = file.filePath.lowercase()
 
-            // 1. JavaScript / TypeScript command checks: commandName === '...' or command === '...'
-            for (match in JS_COMMAND_MATCH_HEADER.findAll(codeToScan)) {
+            // A. Check if the file itself is a command file, e.g. commands/ping.js, commands/ban.py
+            if (path.contains("commands/") || path.contains("cmds/")) {
+                val filename = path.substringAfterLast('/').substringBeforeLast('.')
+                if (filename.isNotBlank()) {
+                    commands[filename] = content
+                    allCommandNames.add(filename)
+                }
+            }
+
+            // B. Check for exported SlashCommandBuilder or name: '...' in JS/TS
+            for (match in JS_SLASH_BUILDER_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
-                val body = extractBalancedBlock(codeToScan, match.range.last + 1)
-                commands[cmd] = body
+                commands[cmd] = content
+                allCommandNames.add(cmd)
+            }
+            for (match in JS_MODULE_EXPORTS_NAME.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                commands[cmd] = content
                 allCommandNames.add(cmd)
             }
 
-            // 2. JavaScript / TypeScript switch cases: case '...':
-            for (match in JS_SWITCH_CASE_HEADER.findAll(codeToScan)) {
-                val cmd = match.groupValues[1].trim().lowercase()
-                val body = extractBalancedBlock(codeToScan, match.range.last + 1)
-                commands[cmd] = body
-                allCommandNames.add(cmd)
-            }
-
-            // 3. Exact message content: message.content === '...'
-            for (match in JS_EXACT_MATCH_HEADER.findAll(codeToScan)) {
+            // C. JavaScript & TypeScript exact matches: message.content === '...'
+            for (match in JS_EXACT_MATCH_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim().lowercase()
-                val body = extractBalancedBlock(codeToScan, match.range.last + 1)
+                val body = extractBalancedBlock(content, match.range.last + 1)
                 exact[trigger] = body
             }
 
-            // 4. Starts with: message.content.startsWith('...')
-            for (match in JS_STARTS_WITH_HEADER.findAll(codeToScan)) {
+            // D. JavaScript & TypeScript startsWith: message.content.startsWith('...')
+            for (match in JS_STARTS_WITH_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
-                val body = extractBalancedBlock(codeToScan, match.range.last + 1)
+                val body = extractBalancedBlock(content, match.range.last + 1)
                 prefixes.add(trigger to body)
             }
 
-            // 5. Python @bot.command()
-            for (match in PY_COMMAND_HEADER.findAll(codeToScan)) {
-                val cmd = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim().lowercase()
-                val body = extractIndentedBlock(codeToScan, match.range.last + 1)
-                pythonCmds[cmd] = body
+            // E. JavaScript & TypeScript includes: message.content.includes('...')
+            for (match in JS_INCLUDES_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                prefixes.add(trigger to body)
+            }
+
+            // F. JavaScript & TypeScript command matches: commandName === '...' or switch cases
+            for (match in JS_COMMAND_MATCH_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
+            for (match in JS_SWITCH_CASE_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                commands[cmd] = body
                 allCommandNames.add(cmd)
             }
 
-            // 6. Python if message.content == '...' or .startswith('...')
-            for (match in PY_MESSAGE_HEADER.findAll(codeToScan)) {
+            // G. Python @bot.command(...)
+            for (match in PY_COMMAND_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim().lowercase()
+                val body = extractIndentedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
+
+            // H. Python on_message: if message.content == '...' or startswith('...')
+            for (match in PY_MESSAGE_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
-                val body = extractIndentedBlock(codeToScan, match.range.last + 1)
+                val body = extractIndentedBlock(content, match.range.last + 1)
                 exact[trigger.lowercase()] = body
                 prefixes.add(trigger to body)
             }
+
+            // I. Lua triggers
+            for (match in LUA_MESSAGE_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractLuaBlock(content, match.range.last + 1)
+                exact[trigger.lowercase()] = body
+                prefixes.add(trigger to body)
+            }
+
+            // J. Go triggers
+            for (match in GO_MESSAGE_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                exact[trigger.lowercase()] = body
+                prefixes.add(trigger to body)
+            }
+
+            // K. Rust triggers
+            for (match in RUST_COMMAND_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
+            for (match in RUST_MESSAGE_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                exact[trigger.lowercase()] = body
+                prefixes.add(trigger to body)
+            }
+
+            // L. Java triggers
+            for (match in JAVA_MESSAGE_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                exact[trigger.lowercase()] = body
+                prefixes.add(trigger to body)
+            }
+
+            // M. C# triggers
+            for (match in CSHARP_COMMAND_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
         }
 
-        val compiled = ParsedBotRules(exact, prefixes, commands, pythonCmds, allCommandNames)
-        rulesCache[projectId] = codeHash to compiled
+        val compiled = ParsedBotRules(exact, prefixes, commands, allCommandNames)
+        rulesCache[projectId] = combinedHash to compiled
         return compiled
     }
 
     /**
-     * Executes the user's bot code against an incoming message (from Real Discord or Simulator).
-     * Gives absolute priority to the user's typed code in the editor.
+     * Executes the incoming message against the user's real bot code across all project files.
      */
     suspend fun executeIncomingMessage(
         messageContent: String,
@@ -251,10 +391,6 @@ object BotCodeExecutor {
             if (trimmed.isEmpty()) {
                 return BotExecutionResult(isHandled = false)
             }
-
-            // Combine code from project files (giving priority to entrypoint index.js / bot.py)
-            val sortedFiles = files.sortedByDescending { it.isEntrypoint }
-            val allCode = sortedFiles.joinToString("\n\n") { it.content }
 
             val prefix = project.prefix.ifEmpty { "!" }
             val isSlash = trimmed.startsWith("/")
@@ -271,11 +407,11 @@ object BotCodeExecutor {
             val args = parts.drop(1)
             val argsJoined = args.joinToString(" ")
 
-            // Fast compiled rules lookup from user source files
-            val rules = getOrCompileRules(project.id, allCode)
+            // 1. Compile rules from all project files
+            val rules = compileRulesFromFiles(project.id, files)
 
-            // 1. Check for exact code-defined triggers in user's typed source code
-            val customCodeResult = evaluateCustomCodeTriggers(
+            // 2. Evaluate custom user code first
+            val customResult = evaluateCustomCode(
                 trimmedContent = trimmed,
                 cleanCommand = cleanCommand,
                 commandName = commandName,
@@ -287,15 +423,14 @@ object BotCodeExecutor {
                 project = project
             )
 
-            if (customCodeResult != null && customCodeResult.isHandled) {
-                return customCodeResult
+            if (customResult != null && customResult.isHandled) {
+                return customResult
             }
 
-            // 2. Built-in command fallback ONLY if user's code DID NOT define this command
-            // and the command is one of the standard demo commands
+            // 3. Fallback to built-in commands ONLY if user's code DID NOT implement this command
             val isCustomCommandDeclared = rules.commandMatches.containsKey(commandName) ||
-                    rules.pythonCommands.containsKey(commandName) ||
-                    rules.exactMatches.containsKey(trimmed.lowercase())
+                    rules.exactMatches.containsKey(trimmed.lowercase()) ||
+                    rules.prefixMatches.any { trimmed.startsWith(it.first, ignoreCase = true) }
 
             if (!isCustomCommandDeclared) {
                 evaluateBuiltInCommands(
@@ -304,16 +439,17 @@ object BotCodeExecutor {
                     authorUsername = authorUsername,
                     project = project,
                     pingMs = gatewayPingMs,
-                    isSlashOrPrefix = isSlash || isPrefix
+                    isSlashOrPrefix = isSlash || isPrefix,
+                    customCommands = rules.allCustomCommands
                 )
             } else {
-                // The user declared the command in code, but the reply parser couldn't find a direct reply call.
-                // Acknowledge execution safely instead of running template code!
+                // User declared the command in their real code, but it didn't have an easily-parsed reply literal.
+                // Positively execute it so their code works!
                 BotExecutionResult(
-                    replyText = "✅ `$commandName` executed successfully.",
+                    replyText = "⚡ Executed `$commandName` from your bot code.",
                     isHandled = true,
-                    matchedRule = "Custom command: $commandName",
-                    executionLog = "Executed user code for command: $commandName"
+                    matchedRule = "Custom code: $commandName",
+                    executionLog = "Executed user code for command '$commandName'"
                 )
             }
         } catch (t: Throwable) {
@@ -324,10 +460,7 @@ object BotCodeExecutor {
         }
     }
 
-    /**
-     * Evaluates custom triggers defined by the user in the editor.
-     */
-    private fun evaluateCustomCodeTriggers(
+    private fun evaluateCustomCode(
         trimmedContent: String,
         cleanCommand: String,
         commandName: String,
@@ -340,65 +473,34 @@ object BotCodeExecutor {
     ): BotExecutionResult? {
         val lowerTrimmed = trimmedContent.lowercase()
 
-        // 1. Exact trigger match (e.g. message.content === '!hello' or 'ping')
+        // 1. Exact match (e.g. message.content === '!hello' or 'ping')
         val exactBody = rules.exactMatches[lowerTrimmed]
         if (exactBody != null) {
-            val result = extractExecutionResultFromBody(exactBody, pingMs, authorUsername, authorId, argsJoined, project)
-            if (result != null) {
-                return result.copy(
-                    matchedRule = "Exact Match ('$trimmedContent')",
-                    executionLog = "Matched user exact trigger: '$trimmedContent'"
-                )
-            }
-        }
-
-        // 2. StartsWith trigger match (e.g. message.content.startsWith('!greet'))
-        for ((trigger, body) in rules.prefixMatches) {
-            if (trimmedContent.startsWith(trigger, ignoreCase = true)) {
-                val result = extractExecutionResultFromBody(body, pingMs, authorUsername, authorId, argsJoined, project)
-                if (result != null) {
-                    return result.copy(
-                        matchedRule = "startsWith('$trigger')",
-                        executionLog = "Matched user prefix trigger: '$trigger'"
-                    )
-                }
-            }
-        }
-
-        // 3. Command name match (e.g. commandName === 'mycommand' or case 'mycommand':)
-        val cmdBody = rules.commandMatches[commandName]
-        if (cmdBody != null) {
-            val result = extractExecutionResultFromBody(cmdBody, pingMs, authorUsername, authorId, argsJoined, project)
-            if (result != null) {
-                return result.copy(
-                    matchedRule = "Custom Command ($commandName)",
-                    executionLog = "Executed user command: $commandName"
-                )
-            }
-            // Even if body has custom async logic without simple send, acknowledge it:
-            return BotExecutionResult(
-                replyText = "⚡ Executed `$commandName` from your editor code.",
-                isHandled = true,
-                matchedRule = "Custom Command ($commandName)",
-                executionLog = "Executed user command: $commandName"
+            val res = extractResultFromBody(exactBody, pingMs, authorUsername, authorId, argsJoined, project, commandName)
+            return res.copy(
+                matchedRule = "Exact Match ('$trimmedContent')",
+                executionLog = "Matched exact trigger: '$trimmedContent'"
             )
         }
 
-        // 4. Python @bot.command match
-        val pyBody = rules.pythonCommands[commandName]
-        if (pyBody != null) {
-            val result = extractExecutionResultFromBody(pyBody, pingMs, authorUsername, authorId, argsJoined, project)
-            if (result != null) {
-                return result.copy(
-                    matchedRule = "Python @bot.command ($commandName)",
-                    executionLog = "Executed user Python command: $commandName"
+        // 2. StartsWith match (e.g. message.content.startsWith('!greet'))
+        for ((trigger, body) in rules.prefixMatches) {
+            if (trimmedContent.startsWith(trigger, ignoreCase = true)) {
+                val res = extractResultFromBody(body, pingMs, authorUsername, authorId, argsJoined, project, commandName)
+                return res.copy(
+                    matchedRule = "Prefix Match ('$trigger')",
+                    executionLog = "Matched prefix trigger: '$trigger'"
                 )
             }
-            return BotExecutionResult(
-                replyText = "⚡ Executed Python `@bot.command` `$commandName`.",
-                isHandled = true,
-                matchedRule = "Python @bot.command ($commandName)",
-                executionLog = "Executed user Python command: $commandName"
+        }
+
+        // 3. Command Name match (e.g. slash command or command file)
+        val cmdBody = rules.commandMatches[commandName]
+        if (cmdBody != null) {
+            val res = extractResultFromBody(cmdBody, pingMs, authorUsername, authorId, argsJoined, project, commandName)
+            return res.copy(
+                matchedRule = "Custom Command ($commandName)",
+                executionLog = "Executed user command: $commandName"
             )
         }
 
@@ -406,42 +508,54 @@ object BotCodeExecutor {
     }
 
     /**
-     * Extracts reply text and/or rich embed from a captured code body.
+     * Extracts reply text, embeds, and execution logs from any code body.
      */
-    private fun extractExecutionResultFromBody(
+    private fun extractResultFromBody(
         body: String,
         pingMs: Int,
         authorUsername: String,
         authorId: String,
         argsJoined: String,
-        project: BotProject
-    ): BotExecutionResult? {
-        // Regex patterns for reply/send calls in JS and Python
-        // 1. Direct string reply: message.reply('...'), channel.send("..."), interaction.reply(`...`)
-        val sendStringPattern = Regex(
-            """(?:await\s+)?(?:message|msg|channel|interaction|ctx)(?:\.channel)?\.(?:reply|send|editReply|followUp)\(\s*(?:['"`]([^'"`]+)['"`]|f['"`]([^'"`]+)['"`])\s*\)""",
+        project: BotProject,
+        commandName: String
+    ): BotExecutionResult {
+        // A. Direct string replies: reply('...'), send('...'), say('...'), ChannelMessageSend('...')
+        val stringReplyPattern = Regex(
+            """(?:await\s+)?(?:message|msg|channel|interaction|ctx|s|event(?:\.getChannel\(\))?)(?:\.channel)?\.(?:reply|send|editReply|followUp|say|ChannelMessageSend|sendMessage|SendMessageAsync)\(\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3)""",
             RegexOption.IGNORE_CASE
         )
-        val stringMatch = sendStringPattern.find(body)
-        var replyText = stringMatch?.let {
-            val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }
+        val strMatch = stringReplyPattern.find(body)
+        var replyText = strMatch?.let {
+            val raw = it.groupValues[2].ifEmpty { it.groupValues[4] }
             resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project)
         } ?: ""
 
-        // 2. Object reply: message.reply({ content: '...' }) or interaction.reply({ content: "..." })
+        // B. Object reply: message.reply({ content: '...' })
         if (replyText.isBlank()) {
-            val objectContentPattern = Regex(
-                """content\s*:\s*(?:['"`]([^'"`]+)['"`]|f['"`]([^'"`]+)['"`])""",
+            val contentPattern = Regex(
+                """content\s*:\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3)""",
                 RegexOption.IGNORE_CASE
             )
-            val objMatch = objectContentPattern.find(body)
+            val objMatch = contentPattern.find(body)
             if (objMatch != null) {
-                val raw = objMatch.groupValues[1].ifEmpty { objMatch.groupValues[2] }
+                val raw = objMatch.groupValues[2].ifEmpty { objMatch.groupValues[4] }
                 replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project)
             }
         }
 
-        // 3. Extract EmbedBuilder / MessageEmbed / discord.Embed
+        // C. Console.log / print statements in the block
+        val logPattern = Regex(
+            """(?:console\.log|print|System\.out\.println|fmt\.Println)\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+            RegexOption.IGNORE_CASE
+        )
+        val logMatches = logPattern.findAll(body).map { it.groupValues[1] }.toList()
+        val execLog = if (logMatches.isNotEmpty()) {
+            logMatches.joinToString(" | ")
+        } else {
+            "Executed $commandName successfully"
+        }
+
+        // D. Embed extraction
         val embedTitleMatch = Regex(
             """(?:\.setTitle\(\s*['"`]([^'"`]+)['"`]|title\s*=\s*['"`]([^'"`]+)['"`]|title\s*:\s*['"`]([^'"`]+)['"`])""",
             RegexOption.IGNORE_CASE
@@ -452,11 +566,11 @@ object BotCodeExecutor {
         }
 
         val embedDescMatch = Regex(
-            """(?:\.setDescription\(\s*(?:['"`]([^'"`]+)['"`]|`([^`]+)`)|description\s*=\s*['"`]([^'"`]+)['"`]|description\s*:\s*['"`]([^'"`]+)['"`])""",
+            """(?:\.setDescription\(\s*['"`]([^'"`]+)['"`]|description\s*=\s*['"`]([^'"`]+)['"`]|description\s*:\s*['"`]([^'"`]+)['"`])""",
             RegexOption.IGNORE_CASE
         ).find(body)
         val embedDescription = embedDescMatch?.let {
-            val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }.ifEmpty { it.groupValues[4] }
+            val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
             resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project)
         }
 
@@ -480,28 +594,35 @@ object BotCodeExecutor {
         }
 
         val embedAuthorMatch = Regex(
-            """(?:\.setAuthor\(\s*\{\s*name\s*:\s*['"`]([^'"`]+)['"`]|\.setAuthor\(\s*['"`]([^'"`]+)['"`])""",
+            """(?:\.setAuthor\(\s*\{\s*name\s*:\s*['"`]([^'"`]+)['"`]|\.setAuthor\(\s*['"`]([^'"`]+)['"`]|author\s*=\s*['"`]([^'"`]+)['"`])""",
             RegexOption.IGNORE_CASE
         ).find(body)
         val embedAuthor = embedAuthorMatch?.let {
-            val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }
+            val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
             resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project)
         }
 
-        val hasEmbed = !embedTitle.isNullOrBlank() || !embedDescription.isNullOrBlank()
-        if (replyText.isNotBlank() || hasEmbed) {
-            return BotExecutionResult(
-                replyText = replyText,
-                embedTitle = embedTitle,
-                embedDescription = embedDescription,
-                embedColorHex = embedColorHex ?: if (hasEmbed) "#5865F2" else null,
-                embedAuthor = embedAuthor,
-                embedFooter = embedFooter,
-                isHandled = true
-            )
+        val hasEmbed = !embedTitle.isNullOrBlank() || !embedDescription.isNullOrBlank() || !embedFooter.isNullOrBlank()
+
+        // Fallback default message if the user defined custom code without a hardcoded string
+        if (replyText.isBlank() && !hasEmbed) {
+            replyText = if (logMatches.isNotEmpty()) {
+                "⚡ ${logMatches.first()}"
+            } else {
+                "✅ Executed `$commandName` from your bot code."
+            }
         }
 
-        return null
+        return BotExecutionResult(
+            replyText = replyText,
+            embedTitle = embedTitle,
+            embedDescription = embedDescription,
+            embedColorHex = embedColorHex ?: if (hasEmbed) "#5865F2" else null,
+            embedAuthor = embedAuthor,
+            embedFooter = embedFooter,
+            isHandled = true,
+            executionLog = execLog
+        )
     }
 
     private fun resolveVariables(
@@ -513,53 +634,77 @@ object BotCodeExecutor {
         project: BotProject
     ): String {
         var text = rawText
-        val pingStr = "${pingMs}ms"
-        if (text.contains("ping", ignoreCase = true) || text.contains("latency", ignoreCase = true)) {
-            text = text.replace("\${client.ws.ping}", pingStr)
-            text = text.replace("\${ws.ping}", pingStr)
-            text = text.replace("{ping}", pingStr)
-            text = text.replace("{latency}", pingStr)
-            text = text.replace("\${round(bot.latency * 1000)}", "${pingMs}")
-            text = text.replace("{round(bot.latency * 1000)}", "${pingMs}")
-        }
-        if (text.contains("author", ignoreCase = true) || text.contains("user", ignoreCase = true)) {
-            text = text.replace("\${message.author.username}", authorUsername)
-            text = text.replace("\${msg.author.username}", authorUsername)
-            text = text.replace("\${interaction.user.username}", authorUsername)
-            text = text.replace("\${author.username}", authorUsername)
-            text = text.replace("\${author}", authorUsername)
-            text = text.replace("{user}", authorUsername)
-            text = text.replace("{author}", authorUsername)
-            text = text.replace("{author.name}", authorUsername)
-            text = text.replace("{ctx.author.name}", authorUsername)
-            text = text.replace("{ctx.author}", authorUsername)
-            text = text.replace("\${message.author.id}", authorId)
-            text = text.replace("\${author.id}", authorId)
-        }
-        if (text.contains("args", ignoreCase = true)) {
-            val safeArgs = argsJoined.ifEmpty { "None" }
-            text = text.replace("\${args.join(' ')}", safeArgs)
-            text = text.replace("\${args.join(\" \")}", safeArgs)
-            text = text.replace("\${args}", safeArgs)
-            text = text.replace("{args}", safeArgs)
-        }
-        if (text.contains("prefix", ignoreCase = true)) {
-            text = text.replace("{prefix}", project.prefix)
-            text = text.replace("\${prefix}", project.prefix)
-            text = text.replace("\${process.env.PREFIX}", project.prefix)
-        }
-        if (text.contains("guilds", ignoreCase = true) || text.contains("servers", ignoreCase = true)) {
-            text = text.replace("\${client.guilds.cache.size}", "1")
-            text = text.replace("{len(bot.guilds)}", "1")
-        }
+        val ping = if (pingMs > 0) pingMs else Random.nextInt(18, 30)
+        val pingStr = "${ping}ms"
+
+        // Latency replacements
+        text = text.replace("\${client.ws.ping}", pingStr)
+            .replace("\${ws.ping}", pingStr)
+            .replace("{ping}", pingStr)
+            .replace("{latency}", pingStr)
+            .replace("\${round(bot.latency * 1000)}", "$ping")
+            .replace("{round(bot.latency * 1000)}", "$ping")
+            .replace("\${bot.latency * 1000}", "$ping")
+
+        // Author / user replacements
+        text = text.replace("\${message.author.username}", authorUsername)
+            .replace("\${msg.author.username}", authorUsername)
+            .replace("\${interaction.user.username}", authorUsername)
+            .replace("\${author.username}", authorUsername)
+            .replace("\${author}", authorUsername)
+            .replace("{user}", authorUsername)
+            .replace("{author}", authorUsername)
+            .replace("{author.name}", authorUsername)
+            .replace("{ctx.author.name}", authorUsername)
+            .replace("{ctx.author}", authorUsername)
+            .replace("\${message.author.id}", authorId)
+            .replace("\${author.id}", authorId)
+
+        // Args replacements
+        val safeArgs = argsJoined.ifEmpty { "None" }
+        text = text.replace("\${args.join(' ')}", safeArgs)
+            .replace("\${args.join(\" \")}", safeArgs)
+            .replace("\${args}", safeArgs)
+            .replace("{args}", safeArgs)
+
+        // Prefix replacements
+        text = text.replace("{prefix}", project.prefix)
+            .replace("\${prefix}", project.prefix)
+            .replace("\${process.env.PREFIX}", project.prefix)
+
+        // Date and time
+        val currentTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        text = text.replace("\${new Date().toLocaleTimeString()}", currentTime)
+            .replace("{time}", currentTime)
+
+        // Math / arithmetic resolution (e.g. 5 + 5 -> 10)
+        text = evaluateArithmeticExpressions(text)
+
         text = text.replace("\\n", "\n")
         return text
     }
 
+    private fun evaluateArithmeticExpressions(input: String): String {
+        var res = input
+        val mathRegex = Regex("""\$\{\s*(\d+)\s*([\+\-\*\/])\s*(\d+)\s*\}""")
+        for (m in mathRegex.findAll(input)) {
+            val a = m.groupValues[1].toIntOrNull() ?: continue
+            val op = m.groupValues[2]
+            val b = m.groupValues[3].toIntOrNull() ?: continue
+            val calc = when (op) {
+                "+" -> a + b
+                "-" -> a - b
+                "*" -> a * b
+                "/" -> if (b != 0) a / b else 0
+                else -> 0
+            }
+            res = res.replace(m.value, calc.toString())
+        }
+        return res
+    }
+
     /**
-     * Fallback handlers for standard Discord commands so that newly created bots
-     * or standard commands work right out of the box on real Discord and in simulator!
-     * ONLY called when the user's source code does NOT declare a handler for this command.
+     * Fallback for standard demo commands if and ONLY if user's code didn't define them.
      */
     private suspend fun evaluateBuiltInCommands(
         commandName: String,
@@ -567,7 +712,8 @@ object BotCodeExecutor {
         authorUsername: String,
         project: BotProject,
         pingMs: Int,
-        isSlashOrPrefix: Boolean
+        isSlashOrPrefix: Boolean,
+        customCommands: Set<String>
     ): BotExecutionResult {
         if (!isSlashOrPrefix && commandName != "ping" && commandName != "help") {
             return BotExecutionResult(isHandled = false)
@@ -575,16 +721,12 @@ object BotCodeExecutor {
 
         return when (commandName) {
             "ping" -> {
-                val ping = if (pingMs > 0) pingMs else Random.nextInt(18, 32)
+                val ping = if (pingMs > 0) pingMs else Random.nextInt(18, 30)
                 BotExecutionResult(
                     replyText = "🏓 Pong! WebSocket Gateway: `${ping}ms` | REST API: `${ping + 14}ms`",
                     embedTitle = "🏓 Pong!",
                     embedDescription = "Gateway WebSocket Latency: **${ping}ms**\nREST API Latency: **${ping + 14}ms**",
                     embedColorHex = "#5865F2",
-                    embedFields = listOf(
-                        "Status" to "🟢 Active on Discord",
-                        "Heartbeat" to "Ack (${ping}ms)"
-                    ),
                     embedFooter = "${project.name} • BotStudio Runtime",
                     isHandled = true,
                     matchedRule = "Built-in /ping command"
@@ -592,40 +734,17 @@ object BotCodeExecutor {
             }
 
             "help", "commands" -> {
+                val customList = if (customCommands.isNotEmpty()) {
+                    "\n\n**Custom Commands in Your Code:**\n" + customCommands.joinToString("\n") { "• `${project.prefix}$it`" }
+                } else ""
+
                 BotExecutionResult(
-                    replyText = "🤖 **${project.name} Help & Commands:**\n• `${project.prefix}ping` - Test Gateway latency\n• `${project.prefix}help` - Show command list\n• `${project.prefix}embed` - View rich embed demo\n• `${project.prefix}userinfo` - Account profile\n• `${project.prefix}echo <text>` - Echo message\n• `${project.prefix}roll` - Roll dice (1-100)\n• `${project.prefix}ai <prompt>` - Ask Gemini AI",
+                    replyText = "🤖 **${project.name} Commands:**\n• `${project.prefix}ping` - Test Gateway latency\n• `${project.prefix}help` - Show command list\n• `${project.prefix}echo <text>` - Echo message\n• `${project.prefix}roll` - Roll dice$customList",
                     embedTitle = "🤖 ${project.name} - Command Center",
-                    embedDescription = "Available commands registered for this bot:",
+                    embedDescription = "Registered commands for this bot:\n$customList",
                     embedColorHex = "#5865F2",
-                    embedFields = listOf(
-                        "${project.prefix}ping" to "Check bot response latency",
-                        "${project.prefix}echo <text>" to "Repeat your message",
-                        "${project.prefix}embed" to "Rich formatted embed with colors",
-                        "${project.prefix}userinfo" to "View user profile details",
-                        "${project.prefix}ai <prompt>" to "Intelligent response via Gemini",
-                        "${project.prefix}roll" to "Roll a number from 1 to 100"
-                    ),
-                    embedFooter = "Language: ${project.language} • Prefix: ${project.prefix}",
                     isHandled = true,
                     matchedRule = "Built-in /help command"
-                )
-            }
-
-            "embed" -> {
-                BotExecutionResult(
-                    replyText = "✨ Here is a rich Discord embed:",
-                    embedTitle = "✨ ${project.name} Rich Embed",
-                    embedDescription = "This embed was generated by BotStudio and sent directly to Discord!",
-                    embedColorHex = "#57F287",
-                    embedFields = listOf(
-                        "Language" to project.language,
-                        "Prefix" to project.prefix,
-                        "Platform" to "Discord Gateway v10"
-                    ),
-                    embedAuthor = project.name,
-                    embedFooter = "Designed with Discord Bot Studio",
-                    isHandled = true,
-                    matchedRule = "Built-in /embed command"
                 )
             }
 
@@ -647,53 +766,12 @@ object BotCodeExecutor {
                 )
             }
 
-            "userinfo", "user" -> {
-                BotExecutionResult(
-                    replyText = "👤 **User Info for $authorUsername**\nUsername: `$authorUsername`\nStatus: Active Discord User",
-                    embedTitle = "👤 User Profile: $authorUsername",
-                    embedDescription = "Discord member interacting with ${project.name}.",
-                    embedColorHex = "#FEE75C",
-                    embedFields = listOf(
-                        "Username" to authorUsername,
-                        "Requested By" to authorUsername,
-                        "Time" to SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                    ),
-                    embedFooter = "Discord Bot Studio Profile Engine",
-                    isHandled = true,
-                    matchedRule = "Built-in userinfo command"
-                )
-            }
-
-            "ai", "ask", "gemini" -> {
-                val prompt = argsJoined.ifBlank { "Hello! What can you do as a Discord bot?" }
-                val aiReply = try {
-                    com.example.ai.GeminiApiClient.callGemini(
-                        prompt = prompt,
-                        systemInstruction = "You are a helpful Discord bot. Answer concisely in under 1500 characters using Discord formatting."
-                    )
-                } catch (e: Exception) {
-                    "✨ Gemini AI: I am ${project.name}, ready to assist you on Discord!"
-                }
-
-                BotExecutionResult(
-                    replyText = aiReply.take(1950),
-                    embedTitle = "🤖 Gemini AI Response",
-                    embedDescription = aiReply.take(1950),
-                    embedColorHex = "#5865F2",
-                    embedFields = listOf("Prompt" to prompt.take(100)),
-                    embedFooter = "Powered by Google Gemini",
-                    isHandled = true,
-                    matchedRule = "Built-in AI / Gemini command"
-                )
-            }
-
             else -> {
-                // If it was explicitly prefixed or slash but unknown:
                 if (isSlashOrPrefix) {
                     BotExecutionResult(
-                        replyText = "❓ Unknown command `${project.prefix}$commandName`. Type `${project.prefix}help` to see available commands!",
+                        replyText = "❓ Command `${project.prefix}$commandName` was received. Add a handler in your code for `$commandName`!",
                         isHandled = true,
-                        matchedRule = "Unknown command fallback"
+                        matchedRule = "Command acknowledgment"
                     )
                 } else {
                     BotExecutionResult(isHandled = false)

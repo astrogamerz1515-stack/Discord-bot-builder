@@ -1423,6 +1423,142 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     )
                 }
             }
+
+            // Caret Tracker & Go to Line Button
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .clickable { showGoToLineDialog = true }
+                    .testTag("btn_caret_tracker_metric")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🎯 Ln ${currentLineAndCol.first}:${currentLineAndCol.second} (Go to)",
+                        color = DiscordBlurple,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Auto-Create Referenced Files Button
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordGreen.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .clickable { viewModel.autoCreateFilesFromCode() }
+                    .testTag("btn_auto_create_files")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "Auto Create Files",
+                        tint = DiscordGreen,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Auto-Files",
+                        color = DiscordGreen,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Multi-Language Selector Chip
+            Surface(
+                color = DiscordElevated,
+                shape = RoundedCornerShape(4.dp),
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple),
+                modifier = Modifier
+                    .clickable { showLanguageSelectorDialog = true }
+                    .testTag("btn_select_language_mode")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = currentLanguageDisplayName,
+                        color = DiscordBlurple,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(text = "▾", color = DiscordTextSecondary, fontSize = 10.sp)
+                }
+            }
+
+            // Fullscreen Editor Toggle Button
+            Surface(
+                color = if (editorFullscreenMode) DiscordBlurple else DiscordHover,
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .clickable { viewModel.toggleEditorFullscreen() }
+                    .testTag("btn_toggle_fullscreen")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (editorFullscreenMode) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        contentDescription = if (editorFullscreenMode) "Exit Fullscreen" else "Fullscreen Editor",
+                        tint = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                        text = if (editorFullscreenMode) "Exit" else "Full",
+                        color = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // PM2 24/7 Service Toggle Button
+            val isPm2Online = pm2Processes.any { it.status == com.example.engine.Pm2Status.ONLINE }
+            Surface(
+                color = if (isPm2Online) DiscordGreen.copy(alpha = 0.2f) else DiscordHover,
+                shape = RoundedCornerShape(4.dp),
+                border = if (isPm2Online) androidx.compose.foundation.BorderStroke(0.5.dp, DiscordGreen) else null,
+                modifier = Modifier
+                    .clickable {
+                        viewModel.runScriptWithPm2()
+                        Toast.makeText(context, "⚡ PM2 24/7 Active! Bot runs continuously even when app is closed.", Toast.LENGTH_SHORT).show()
+                    }
+                    .testTag("btn_pm2_247_toggle")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(if (isPm2Online) DiscordGreen else DiscordTextMuted, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = if (isPm2Online) "PM2 24/7" else "PM2",
+                        color = if (isPm2Online) DiscordGreen else DiscordTextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
 
@@ -1648,7 +1784,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                         .defaultMinSize(minHeight = 800.dp)
                         .background(DiscordBackground)
                         .verticalScroll(scrollState)
-                        .padding(bottom = 280.dp)
+                        .padding(bottom = 32.dp)
                 ) {
                     // Line numbers column with active line highlight and error indicators
                     val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
@@ -1878,239 +2014,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             }
         }
 
-        // Professional IDE Bottom Status Bar (Ultra-Compact)
-        Surface(
-            color = DiscordSurface,
-            border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Cursor position and file metrics
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        color = DiscordElevated,
-                        shape = RoundedCornerShape(4.dp),
-                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple.copy(alpha = 0.5f)),
-                        modifier = Modifier
-                            .clickable {
-                                focusRequester.requestFocus()
-                                keyboardController?.show()
-                                editorScope.launch {
-                                    val lineTopPx = ((currentLineAndCol.first - 1) * lineHeightPx).toInt()
-                                    val vViewport = scrollState.viewportSize
-                                    val targetV = (lineTopPx - (vViewport / 3)).coerceIn(0, scrollState.maxValue)
-                                    scrollState.animateScrollTo(targetV, animationSpec = androidx.compose.animation.core.tween(150))
-                                    val hViewport = horizontalScrollState.viewportSize
-                                    if (hViewport > 0) {
-                                        val charWidthPx = with(density) { (currentFontSize.value * 0.605f).sp.toPx() }
-                                        val targetH = (((currentLineAndCol.second - 1) * charWidthPx) - (hViewport / 4)).toInt().coerceIn(0, horizontalScrollState.maxValue)
-                                        horizontalScrollState.animateScrollTo(targetH, animationSpec = androidx.compose.animation.core.tween(150))
-                                    }
-                                }
-                            }
-                            .testTag("btn_caret_tracker_metric")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "🎯 Ln ${currentLineAndCol.first}, Col ${currentLineAndCol.second}",
-                                color = DiscordBlurple,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
 
-                    // Go to Line Button
-                    Surface(
-                        color = DiscordDarker,
-                        shape = RoundedCornerShape(4.dp),
-                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordHover),
-                        modifier = Modifier
-                            .clickable { showGoToLineDialog = true }
-                            .testTag("btn_go_to_line_compact")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "Go to",
-                                color = DiscordTextSecondary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "•",
-                        color = DiscordTextMuted,
-                        fontSize = 10.sp
-                    )
-
-                    Text(
-                        text = "${textFieldValue.text.length} chars",
-                        color = DiscordTextMuted,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-
-                    Text(
-                        text = "•",
-                        color = DiscordTextMuted,
-                        fontSize = 10.sp
-                    )
-
-                    // Clickable Language Selector Chip
-                    Surface(
-                        color = DiscordElevated,
-                        shape = RoundedCornerShape(4.dp),
-                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple),
-                        modifier = Modifier
-                            .clickable { showLanguageSelectorDialog = true }
-                            .testTag("btn_select_language_mode")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = currentLanguageDisplayName,
-                                color = DiscordBlurple,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "▾",
-                                color = DiscordTextSecondary,
-                                fontSize = 10.sp
-                            )
-                        }
-                    }
-                }
-
-                // Diagnostics, Zoom controls and Encoding status
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Pinch Zoom Indicator Badge (no click +/- buttons; operated via pinch-to-zoom)
-                    Surface(
-                        color = if (fontScale != 1.0f) DiscordBlurple.copy(alpha = 0.2f) else DiscordHover,
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier
-                            .clickable { fontScale = 1.0f }
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                            .testTag("badge_editor_pinch_zoom")
-                    ) {
-                        Text(
-                            text = "🔍 ${(fontScale * 100).toInt()}%",
-                            color = if (fontScale != 1.0f) DiscordBlurple else DiscordTextSecondary,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    val isPm2Online = pm2Processes.any { it.status == com.example.engine.Pm2Status.ONLINE }
-                    Surface(
-                        color = if (isPm2Online) DiscordGreen.copy(alpha = 0.2f) else DiscordHover,
-                        shape = RoundedCornerShape(4.dp),
-                        border = if (isPm2Online) androidx.compose.foundation.BorderStroke(0.5.dp, DiscordGreen) else null,
-                        modifier = Modifier
-                            .clickable {
-                                viewModel.runScriptWithPm2()
-                                Toast.makeText(context, "⚡ PM2 24/7 Active! Bot runs continuously even when app is closed.", Toast.LENGTH_SHORT).show()
-                            }
-                            .testTag("btn_pm2_247_toggle")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(if (isPm2Online) DiscordGreen else DiscordTextMuted, CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (isPm2Online) "PM2 24/7" else "PM2",
-                                color = if (isPm2Online) DiscordGreen else DiscordTextSecondary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    // Bottom Navigation Bar toggle
-                    Surface(
-                        color = if (showBottomNavInEditor) DiscordBlurple.copy(alpha = 0.2f) else DiscordHover,
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier
-                            .clickable { viewModel.toggleBottomNavInEditor() }
-                            .testTag("btn_toggle_bottom_nav")
-                    ) {
-                        Text(
-                            text = if (showBottomNavInEditor) "▾ Nav" else "▴ Nav",
-                            color = if (showBottomNavInEditor) DiscordBlurple else DiscordTextSecondary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    // Fullscreen Editor Toggle
-                    Surface(
-                        color = if (editorFullscreenMode) DiscordBlurple else DiscordHover,
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier
-                            .clickable { viewModel.toggleEditorFullscreen() }
-                            .testTag("btn_toggle_fullscreen")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (editorFullscreenMode) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                contentDescription = if (editorFullscreenMode) "Exit Fullscreen" else "Fullscreen Editor",
-                                tint = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(
-                                text = if (editorFullscreenMode) "Exit" else "Full",
-                                color = if (editorFullscreenMode) Color.White else DiscordTextSecondary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "UTF-8",
-                        color = DiscordTextMuted,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-        }
 
         // Error Diagnostics Tray at bottom of editor (only shown when explicitly opened by user)
         if (showDiagnosticsPanel) {

@@ -194,14 +194,26 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val savedRunningId = prefs.getLong(com.example.service.BotBackgroundService.PREF_PROJECT_ID, 0L)
         val isMarkedRunning = prefs.getBoolean(com.example.service.BotBackgroundService.PREF_IS_RUNNING, false)
 
+        val settingsPrefs = application.getSharedPreferences("bot_studio_settings", android.content.Context.MODE_PRIVATE)
+        val hasSeededInitial = settingsPrefs.getBoolean("has_seeded_initial_default_v2", false)
+
         viewModelScope.launch {
             allProjects.collect { projects ->
                 if (projects.isEmpty()) {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        val database = com.example.data.database.AppDatabase.getDatabase(application)
-                        com.example.data.templates.BotTemplates.seedDefaultProjects(database)
+                    if (!hasSeededInitial) {
+                        // Seed only ONCE on brand-new fresh app install
+                        settingsPrefs.edit().putBoolean("has_seeded_initial_default_v2", true).apply()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val database = com.example.data.database.AppDatabase.getDatabase(application)
+                            com.example.data.templates.BotTemplates.seedDefaultProjects(database)
+                        }
+                    } else {
+                        // User deliberately deleted all bots or has no bots.
+                        // Never auto-create bots without user permission!
+                        _currentProject.value = null
+                        _projectFiles.value = emptyList()
                     }
-                } else if (_currentProject.value == null) {
+                } else if (_currentProject.value == null || !projects.any { it.id == _currentProject.value?.id }) {
                     val target = if (isMarkedRunning && savedRunningId > 0) {
                         projects.find { it.id == savedRunningId } ?: projects.first()
                     } else {
@@ -383,8 +395,37 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         _saveStatus.value = "Saved at $timeStr"
 
+        val project = _currentProject.value
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             repository.saveFile(updatedFile)
+            if (project != null) {
+                com.example.engine.BotFileAutoCreator.autoCreateReferencedFiles(project, currentFiles, repository)
+            }
+        }
+    }
+
+    fun autoCreateFilesFromCode() {
+        val project = _currentProject.value ?: return
+        val currentFiles = _projectFiles.value
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val created = com.example.engine.BotFileAutoCreator.autoCreateReferencedFiles(project, currentFiles, repository)
+            if (created.isNotEmpty()) {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        getApplication(),
+                        "📁 Auto-created ${created.size} file(s): ${created.joinToString(", ")}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            } else {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        getApplication(),
+                        "✓ All files in code are up to date!",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
         }
     }
 

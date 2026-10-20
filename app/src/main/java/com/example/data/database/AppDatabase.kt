@@ -47,16 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "discord_bot_studio.db"
                 ).fallbackToDestructiveMigration(dropAllTables = true)
-                .addCallback(object : Callback() {
-                    override fun onCreate(db: SupportSQLiteDatabase) {
-                        super.onCreate(db)
-                        // Seed default bot project in background
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val database = getDatabase(context)
-                            BotTemplates.seedDefaultProjects(database)
-                        }
-                    }
-                }).build()
+                .build()
                 INSTANCE = instance
                 instance
             }

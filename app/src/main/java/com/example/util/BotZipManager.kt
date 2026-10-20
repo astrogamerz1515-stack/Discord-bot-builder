@@ -120,6 +120,10 @@ object BotZipManager {
         val detectedLanguage = when (ext) {
             "py" -> BotLanguage.PYTHON
             "ts" -> BotLanguage.TYPESCRIPT
+            "lua" -> BotLanguage.LUA
+            "sh", "bash" -> BotLanguage.SHELL
+            "rb" -> BotLanguage.RUBY
+            "kt", "kts" -> BotLanguage.KOTLIN
             "rs" -> BotLanguage.RUST
             "go" -> BotLanguage.GO
             "java" -> BotLanguage.JAVA
@@ -508,6 +512,26 @@ object BotZipManager {
         // C# check
         if (paths.any { it.endsWith(".cs") || it.endsWith(".csproj") }) {
             return BotLanguage.CSHARP
+        }
+
+        // Lua check
+        if (paths.any { it.endsWith(".lua") }) {
+            return BotLanguage.LUA
+        }
+
+        // Shell check
+        if (paths.any { it.endsWith(".sh") }) {
+            return BotLanguage.SHELL
+        }
+
+        // Ruby check
+        if (paths.any { it.endsWith(".rb") || it == "gemfile" }) {
+            return BotLanguage.RUBY
+        }
+
+        // Kotlin check
+        if (paths.any { it.endsWith(".kt") }) {
+            return BotLanguage.KOTLIN
         }
 
         // Default: JavaScript
