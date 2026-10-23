@@ -195,24 +195,39 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val isMarkedRunning = prefs.getBoolean(com.example.service.BotBackgroundService.PREF_IS_RUNNING, false)
 
         val settingsPrefs = application.getSharedPreferences("bot_studio_settings", android.content.Context.MODE_PRIVATE)
-        val hasSeededInitial = settingsPrefs.getBoolean("has_seeded_initial_default_v2", false)
+        val hasCleanedTemplates = settingsPrefs.getBoolean("has_removed_readymade_templates_v4", false)
+        if (!hasCleanedTemplates) {
+            settingsPrefs.edit().putBoolean("has_removed_readymade_templates_v4", true).apply()
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val templateNames = setOf(
+                    "Aegis Moderation & Utility",
+                    "Aegis",
+                    "Node.js Discord Bot",
+                    "Python Music Bot",
+                    "Advanced Moderator Bot",
+                    "TypeScript Guild Bot",
+                    "Slash Command Studio",
+                    "Discord Economy Bot",
+                    "Rust High-Perf Bot",
+                    "Go Gateway Bot",
+                    "Java JDA Bot",
+                    "C# DSharpPlus Bot"
+                )
+                val allProjs = repository.getAllProjectsSync()
+                for (proj in allProjs) {
+                    if (proj.name in templateNames) {
+                        repository.deleteProject(proj.id)
+                    }
+                }
+            }
+        }
 
         viewModelScope.launch {
             allProjects.collect { projects ->
                 if (projects.isEmpty()) {
-                    if (!hasSeededInitial) {
-                        // Seed only ONCE on brand-new fresh app install
-                        settingsPrefs.edit().putBoolean("has_seeded_initial_default_v2", true).apply()
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            val database = com.example.data.database.AppDatabase.getDatabase(application)
-                            com.example.data.templates.BotTemplates.seedDefaultProjects(database)
-                        }
-                    } else {
-                        // User deliberately deleted all bots or has no bots.
-                        // Never auto-create bots without user permission!
-                        _currentProject.value = null
-                        _projectFiles.value = emptyList()
-                    }
+                    // User requested: No readymade template bots. Completely blank slate.
+                    _currentProject.value = null
+                    _projectFiles.value = emptyList()
                 } else if (_currentProject.value == null || !projects.any { it.id == _currentProject.value?.id }) {
                     val target = if (isMarkedRunning && savedRunningId > 0) {
                         projects.find { it.id == savedRunningId } ?: projects.first()
@@ -708,24 +723,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun createNewFile(fileName: String) {
         val project = _currentProject.value ?: return
         viewModelScope.launch {
-            val ext = fileName.substringAfterLast('.', "").lowercase()
-            val initialContent = when (ext) {
-                "js" -> "// Discord.js Command\nmodule.exports = {\n  name: '${fileName.substringBeforeLast('.')}',\n  description: 'Custom command',\n  async execute(message, args) {\n    await message.reply('Command executed successfully!');\n  }\n};\n"
-                "ts" -> "// TypeScript Discord.js Command\nimport { Message } from 'discord.js';\n\nexport const name = '${fileName.substringBeforeLast('.')}';\nexport const description = 'Custom command';\nexport async function execute(message: Message, args: string[]) {\n  await message.reply('Executed via TypeScript!');\n}\n"
-                "py" -> "# discord.py Extension\nimport discord\nfrom discord.ext import commands\n\nclass CustomCommand(commands.Cog):\n    def __init__(self, bot):\n        self.bot = bot\n\n    @commands.command(name='${fileName.substringBeforeLast('.')}')\n    async def custom_command(self, ctx):\n        await ctx.send('Command response from Python!')\n\nasync def setup(bot):\n    await bot.add_cog(CustomCommand(bot))\n"
-                "json" -> "{\n  \"name\": \"${fileName.substringBeforeLast('.')}\",\n  \"version\": \"1.0.0\",\n  \"enabled\": true\n}\n"
-                "env" -> "# Environment Variables\nDISCORD_TOKEN=${project.botToken}\nCLIENT_ID=${project.clientId}\nPREFIX=${project.prefix}\n"
-                "sql" -> "-- SQL Schema / Query File\nCREATE TABLE IF NOT EXISTS users (\n  id TEXT PRIMARY KEY,\n  username TEXT,\n  points INTEGER DEFAULT 0\n);\n"
-                "sh", "bash" -> "#!/bin/bash\n# Automation script\necho \"Running script for ${project.name}...\"\n"
-                "yaml", "yml" -> "# YAML Configuration\nsettings:\n  enabled: true\n  prefix: \"${project.prefix}\"\n"
-                "toml" -> "# TOML Configuration\n[bot]\nname = \"${project.name}\"\nprefix = \"${project.prefix}\"\n"
-                "html", "htm" -> "<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <title>${project.name} Dashboard</title>\n</head>\n<body>\n  <h1>${project.name} Bot Status: Online</h1>\n</body>\n</html>\n"
-                "css" -> "/* Stylesheet */\nbody {\n  background-color: #0e1015;\n  color: #f2f3f5;\n  font-family: sans-serif;\n}\n"
-                "kt", "kts" -> "// Kotlin script\nfun main() {\n    println(\"Bot helper running\")\n}\n"
-                "lua" -> "-- Lua Discordia command\nlocal custom = {}\nfunction custom.run(message)\n    message:reply(\"Executed via Lua\")\nend\nreturn custom\n"
-                "md" -> "# ${fileName.substringBeforeLast('.')}\n\nDocumentation and notes for ${project.name}.\n"
-                else -> ""
-            }
+            // User requested: When I create a file or a bot, it comes with only blank
+            val initialContent = ""
             val fileId = repository.createFile(project.id, fileName, initialContent)
             val created = repository.getFileById(fileId)
             showNewFileDialog.value = false

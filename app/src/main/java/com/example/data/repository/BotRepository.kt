@@ -81,10 +81,15 @@ class BotRepository(
         )
         val projectId = projectDao.insertProject(newProject)
 
-        // Populate initial files from template
-        val templateFiles = BotTemplates.getTemplateForLanguage(language, name)
-        val projectFiles = templateFiles.map { it.copy(projectId = projectId) }
-        fileDao.insertFiles(projectFiles)
+        // User requested: When creating a bot, it comes with only blank
+        val entryFileName = language.defaultEntryFile.substringAfterLast('/')
+        val blankFile = BotFile(
+            projectId = projectId,
+            filePath = entryFileName,
+            content = "",
+            isEntrypoint = true
+        )
+        fileDao.insertFile(blankFile)
 
         // Log initial message in terminal
         logDao.insertLog(

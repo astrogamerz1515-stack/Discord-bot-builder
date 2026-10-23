@@ -162,37 +162,9 @@ object BotFileAutoCreator {
 
     private fun generateStarterContentForPath(path: String): String {
         val ext = path.substringAfterLast('.', "").lowercase()
-        val filename = path.substringAfterLast('/')
         return when (ext) {
-            "json" -> "{\n  \"description\": \"Auto-created file for $filename\"\n}\n"
-            "js" -> """// Auto-created module: $filename
-module.exports = {
-  name: '${filename.substringBeforeLast('.')}',
-  execute(message, args) {
-    // Custom logic here
-  }
-};
-"""
-            "ts" -> """// Auto-created module: $filename
-export const ${filename.substringBeforeLast('.')} = {
-  name: '${filename.substringBeforeLast('.')}'
-};
-"""
-            "py" -> """# Auto-created script: $filename
-
-def main():
-    pass
-"""
-            "lua" -> """-- Auto-created Lua module: $filename
-local M = {}
-return M
-"""
-            "env" -> "# Auto-created environment variables\n"
-            "md" -> "# ${filename.substringBeforeLast('.').replaceFirstChar { it.uppercase() }}\n\nDocumentation for this project module.\n"
-            "txt" -> ""
-            "csv" -> "id,name,value\n"
-            "yml", "yaml" -> "# Configuration: $filename\n"
-            else -> "// $filename\n"
+            "json" -> "{\n}\n"
+            else -> ""
         }
     }
 }

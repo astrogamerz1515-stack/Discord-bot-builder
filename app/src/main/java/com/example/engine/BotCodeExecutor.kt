@@ -5,7 +5,6 @@ import com.example.data.model.BotProject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.regex.Pattern
 import kotlin.random.Random
 
 data class BotExecutionResult(
@@ -23,21 +22,25 @@ data class BotExecutionResult(
 
 object BotCodeExecutor {
 
-    // 1. JS / TS Exact Triggers
+    // 1. JS / TS Command Matching Patterns
+    private val JS_COMMAND_COMPARISON = Regex(
+        """(?:command|cmd|commandName|c|action|subcommand|name)\s*(?:\.toLowerCase\(\)|\.trim\(\))*\s*===?\s*['"`]([a-zA-Z0-9_\-]+)['"`]""",
+        RegexOption.IGNORE_CASE
+    )
     private val JS_EXACT_MATCH_HEADER = Regex(
-        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\s*===?\s*['"`]([^'"`]+)['"`]""",
+        """(?:message|msg|m)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\s*===?\s*['"`]([^'"`]+)['"`]""",
         RegexOption.IGNORE_CASE
     )
     private val JS_STARTS_WITH_HEADER = Regex(
-        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.startsWith\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+        """(?:message|msg|m)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.startsWith\(\s*(?:['"`]([^'"`]+)['"`]|(?:prefix\s*\+\s*['"`]([^'"`]+)['"`])|`\$\{prefix\}([^`]+)`)\s*\)""",
         RegexOption.IGNORE_CASE
     )
     private val JS_INCLUDES_HEADER = Regex(
-        """(?:message|msg)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.includes\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+        """(?:message|msg|m)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.includes\(\s*['"`]([^'"`]+)['"`]\s*\)""",
         RegexOption.IGNORE_CASE
     )
-    private val JS_COMMAND_MATCH_HEADER = Regex(
-        """(?:(?:interaction\.)?commandName|command|cmd)\s*===?\s*['"`]([a-zA-Z0-9_\-]+)['"`]""",
+    private val JS_INDEX_OF_HEADER = Regex(
+        """(?:message|msg|m)\.content(?:\.toLowerCase\(\)|\.trim\(\))*\.indexOf\(\s*['"`]([^'"`]+)['"`]\s*\)\s*!==?\s*-1""",
         RegexOption.IGNORE_CASE
     )
     private val JS_SWITCH_CASE_HEADER = Regex(
@@ -48,18 +51,34 @@ object BotCodeExecutor {
         """\.setName\(\s*['"`]([a-zA-Z0-9_\-]+)['"`]\s*\)""",
         RegexOption.IGNORE_CASE
     )
+    private val JS_COMMAND_REGISTRATION = Regex(
+        """(?:commands|client\.commands)\.set\(\s*['"`]([a-zA-Z0-9_\-]+)['"`]""",
+        RegexOption.IGNORE_CASE
+    )
     private val JS_MODULE_EXPORTS_NAME = Regex(
         """name\s*:\s*['"`]([a-zA-Z0-9_\-]+)['"`]""",
+        RegexOption.IGNORE_CASE
+    )
+    private val JS_FUNCTION_COMMAND = Regex(
+        """(?:async\s+)?function\s+([a-zA-Z0-9_]+)\s*\(\s*(?:message|msg|interaction|ctx)""",
         RegexOption.IGNORE_CASE
     )
 
     // 2. Python Triggers
     private val PY_COMMAND_HEADER = Regex(
-        """@(?:bot|client|tree|commands)\.(?:command|slash_command)\((?:name\s*=\s*['"`]([a-zA-Z0-9_\-]+)['"`])?[^)]*\)\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*:""",
+        """@(?:bot|client|tree|commands)\.(?:command|slash_command)\((?:[^)]*?name\s*=\s*['"`]([a-zA-Z0-9_\-]+)['"`])?[^)]*\)[\s\S]*?(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*:""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PY_COG_COMMAND_HEADER = Regex(
+        """(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(\s*self\s*,\s*ctx""",
         RegexOption.IGNORE_CASE
     )
     private val PY_MESSAGE_HEADER = Regex(
-        """if\s+message\.content(?:\.lower\(\)|\.strip\(\))*\s*(?:==|\.startswith\()\s*['"`]([^'"`]+)['"`]\)?""",
+        """if\s+message\.content(?:\.lower\(\)|\.strip\(\))*\s*(?:==|\.startswith\()\s*(?:['"`]([^'"`]+)['"`]|f['"`]\{prefix\}([^'"`]+)['"`])\s*\)?""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PY_IN_MESSAGE_HEADER = Regex(
+        """if\s+['"`]([^'"`]+)['"`]\s+in\s+message\.content(?:\.lower\(\))*\s*:""",
         RegexOption.IGNORE_CASE
     )
 
@@ -87,7 +106,7 @@ object BotCodeExecutor {
 
     // 6. Java Triggers
     private val JAVA_MESSAGE_HEADER = Regex(
-        """event\.getMessage\(\)\.getContentRaw\(\)\.(?:equals|startsWith)\(\s*['"]([^'"]+)['"]\s*\)""",
+        """event\.getMessage\(\)\.getContentRaw\(\)\.(?:equals|startsWith|equalsIgnoreCase)\(\s*['"]([^'"]+)['"]\s*\)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -97,13 +116,24 @@ object BotCodeExecutor {
         RegexOption.IGNORE_CASE
     )
 
+    // 8. General Message Listeners
+    private val JS_MESSAGE_CREATE_LISTENER = Regex(
+        """client\.on\(\s*['"`](?:messageCreate|message)['"`]\s*,\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PY_ON_MESSAGE_LISTENER = Regex(
+        """@(?:client|bot)\.event[\s\S]*?(?:async\s+)?def\s+on_message\s*\([^)]*\)\s*:""",
+        RegexOption.IGNORE_CASE
+    )
+
     private val WHITESPACE_REGEX = Regex("\\s+")
 
     data class ParsedBotRules(
         val exactMatches: Map<String, String>, // lowercase trigger -> code body
         val prefixMatches: List<Pair<String, String>>, // trigger -> code body
         val commandMatches: Map<String, String>, // lowercase commandName -> code body
-        val allCustomCommands: Set<String>
+        val allCustomCommands: Set<String>,
+        val generalMessageBody: String? = null
     )
 
     private val rulesCache = java.util.concurrent.ConcurrentHashMap<Long, Pair<Int, ParsedBotRules>>()
@@ -117,11 +147,11 @@ object BotCodeExecutor {
     }
 
     /**
-     * Extracts a balanced block { ... } in JS/TS/Go/Rust/Java/C#.
+     * Extracts a balanced block { ... } in C-like languages.
      */
     fun extractBalancedBlock(text: String, startPos: Int): String {
         val braceIdx = text.indexOf('{', startPos)
-        if (braceIdx == -1 || braceIdx > startPos + 160) {
+        if (braceIdx == -1 || braceIdx > startPos + 180) {
             val semi = text.indexOf(';', startPos)
             val nl = text.indexOf('\n', startPos)
             return when {
@@ -206,33 +236,21 @@ object BotCodeExecutor {
      */
     fun extractAllCommandNames(allCode: String): Set<String> {
         val commands = mutableSetOf<String>()
-        for (m in JS_COMMAND_MATCH_HEADER.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
-        for (m in JS_SWITCH_CASE_HEADER.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
-        for (m in JS_SLASH_BUILDER_HEADER.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
-        for (m in JS_MODULE_EXPORTS_NAME.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
+        for (m in JS_SLASH_BUILDER_HEADER.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
+        for (m in JS_MODULE_EXPORTS_NAME.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
+        for (m in JS_COMMAND_COMPARISON.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
+        for (m in JS_SWITCH_CASE_HEADER.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
+        for (m in JS_COMMAND_REGISTRATION.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
         for (m in PY_COMMAND_HEADER.findAll(allCode)) {
             val name = m.groupValues[1].ifEmpty { m.groupValues[2] }.lowercase()
             commands.add(name)
         }
-        for (m in RUST_COMMAND_HEADER.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
-        for (m in CSHARP_COMMAND_HEADER.findAll(allCode)) {
-            commands.add(m.groupValues[1].lowercase())
-        }
+        for (m in PY_COG_COMMAND_HEADER.findAll(allCode)) commands.add(m.groupValues[1].lowercase())
         return commands
     }
 
     /**
-     * Compiles rules from all project files (including commands folder, bot.py, etc.).
+     * Compiles rules from all project files (including commands folder, cog files, bot.py, etc.).
      */
     private fun compileRulesFromFiles(projectId: Long, files: List<BotFile>): ParsedBotRules {
         val combinedHash = files.fold(0) { acc, f -> acc xor (f.filePath.hashCode() + f.content.hashCode()) }
@@ -245,22 +263,26 @@ object BotCodeExecutor {
         val prefixes = mutableListOf<Pair<String, String>>()
         val commands = mutableMapOf<String, String>()
         val allCommandNames = mutableSetOf<String>()
+        var generalMessageBody: String? = null
+
+        val entryFiles = setOf("index.js", "bot.js", "main.js", "app.js", "bot.py", "main.py", "package.json", "tsconfig.json")
 
         for (file in files) {
             val content = file.content
             if (content.isBlank()) continue
             val path = file.filePath.lowercase()
+            val filename = path.substringAfterLast('/')
+            val nameWithoutExt = filename.substringBeforeLast('.')
 
-            // A. Check if the file itself is a command file, e.g. commands/ping.js, commands/ban.py
-            if (path.contains("commands/") || path.contains("cmds/")) {
-                val filename = path.substringAfterLast('/').substringBeforeLast('.')
-                if (filename.isNotBlank()) {
-                    commands[filename] = content
-                    allCommandNames.add(filename)
+            // A. Check if the file itself is a standalone command file, e.g. commands/whitelist.js, cmds/ban.py, or whitelist.js
+            if ((path.contains("commands/") || path.contains("cmds/") || !entryFiles.contains(filename)) && nameWithoutExt.isNotBlank()) {
+                if (path.endsWith(".js") || path.endsWith(".ts") || path.endsWith(".py") || path.endsWith(".lua") || path.endsWith(".go") || path.endsWith(".rs") || path.endsWith(".java") || path.endsWith(".cs")) {
+                    commands[nameWithoutExt] = content
+                    allCommandNames.add(nameWithoutExt)
                 }
             }
 
-            // B. Check for exported SlashCommandBuilder or name: '...' in JS/TS
+            // B. Slash command builders & module.exports names
             for (match in JS_SLASH_BUILDER_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
                 commands[cmd] = content
@@ -271,35 +293,67 @@ object BotCodeExecutor {
                 commands[cmd] = content
                 allCommandNames.add(cmd)
             }
-
-            // C. JavaScript & TypeScript exact matches: message.content === '...'
-            for (match in JS_EXACT_MATCH_HEADER.findAll(content)) {
-                val trigger = match.groupValues[1].trim().lowercase()
-                val body = extractBalancedBlock(content, match.range.last + 1)
-                exact[trigger] = body
+            for (match in JS_COMMAND_REGISTRATION.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                commands[cmd] = content
+                allCommandNames.add(cmd)
             }
 
-            // D. JavaScript & TypeScript startsWith: message.content.startsWith('...')
-            for (match in JS_STARTS_WITH_HEADER.findAll(content)) {
-                val trigger = match.groupValues[1].trim()
-                val body = extractBalancedBlock(content, match.range.last + 1)
-                prefixes.add(trigger to body)
-            }
-
-            // E. JavaScript & TypeScript includes: message.content.includes('...')
-            for (match in JS_INCLUDES_HEADER.findAll(content)) {
-                val trigger = match.groupValues[1].trim()
-                val body = extractBalancedBlock(content, match.range.last + 1)
-                prefixes.add(trigger to body)
-            }
-
-            // F. JavaScript & TypeScript command matches: commandName === '...' or switch cases
-            for (match in JS_COMMAND_MATCH_HEADER.findAll(content)) {
+            // C. JavaScript & TypeScript command comparisons: if (command === 'whitelist') or if (cmd == 'whitelist')
+            for (match in JS_COMMAND_COMPARISON.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
                 val body = extractBalancedBlock(content, match.range.last + 1)
                 commands[cmd] = body
                 allCommandNames.add(cmd)
             }
+
+            // D. JavaScript & TypeScript exact matches: message.content === '!whitelist'
+            for (match in JS_EXACT_MATCH_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                exact[trigger] = body
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
+            }
+
+            // E. JavaScript & TypeScript startsWith: message.content.startsWith('!whitelist')
+            for (match in JS_STARTS_WITH_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].ifEmpty { match.groupValues[2] }.ifEmpty { match.groupValues[3] }.trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                prefixes.add(trigger to body)
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
+            }
+
+            // F. JavaScript & TypeScript includes / indexOf
+            for (match in JS_INCLUDES_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                prefixes.add(trigger to body)
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
+            }
+            for (match in JS_INDEX_OF_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].trim()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                prefixes.add(trigger to body)
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
+            }
+
+            // G. JavaScript switch cases: case 'whitelist':
             for (match in JS_SWITCH_CASE_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
                 val body = extractBalancedBlock(content, match.range.last + 1)
@@ -307,23 +361,67 @@ object BotCodeExecutor {
                 allCommandNames.add(cmd)
             }
 
-            // G. Python @bot.command(...)
+            // H. JavaScript function command: async function whitelist(message)
+            for (match in JS_FUNCTION_COMMAND.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractBalancedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
+
+            // I. Python @bot.command(...)
             for (match in PY_COMMAND_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim().lowercase()
                 val body = extractIndentedBlock(content, match.range.last + 1)
                 commands[cmd] = body
                 allCommandNames.add(cmd)
             }
+            // Python Cog command: async def whitelist(self, ctx)
+            for (match in PY_COG_COMMAND_HEADER.findAll(content)) {
+                val cmd = match.groupValues[1].trim().lowercase()
+                val body = extractIndentedBlock(content, match.range.last + 1)
+                commands[cmd] = body
+                allCommandNames.add(cmd)
+            }
 
-            // H. Python on_message: if message.content == '...' or startswith('...')
+            // J. Python on_message: if message.content == '...' or startswith('...')
             for (match in PY_MESSAGE_HEADER.findAll(content)) {
+                val trigger = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim()
+                val body = extractIndentedBlock(content, match.range.last + 1)
+                exact[trigger.lowercase()] = body
+                prefixes.add(trigger to body)
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
+            }
+            for (match in PY_IN_MESSAGE_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
                 val body = extractIndentedBlock(content, match.range.last + 1)
                 exact[trigger.lowercase()] = body
                 prefixes.add(trigger to body)
+                val clean = trigger.removePrefix("!").removePrefix("/").trim()
+                if (clean.isNotBlank()) {
+                    commands[clean] = body
+                    allCommandNames.add(clean)
+                }
             }
 
-            // I. Lua triggers
+            // K. General message listeners (e.g. client.on('messageCreate') or on_message)
+            if (generalMessageBody == null) {
+                val jsMsgMatch = JS_MESSAGE_CREATE_LISTENER.find(content)
+                if (jsMsgMatch != null) {
+                    generalMessageBody = extractBalancedBlock(content, jsMsgMatch.range.last + 1)
+                } else {
+                    val pyMsgMatch = PY_ON_MESSAGE_LISTENER.find(content)
+                    if (pyMsgMatch != null) {
+                        generalMessageBody = extractIndentedBlock(content, pyMsgMatch.range.last + 1)
+                    }
+                }
+            }
+
+            // L. Lua triggers
             for (match in LUA_MESSAGE_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
                 val body = extractLuaBlock(content, match.range.last + 1)
@@ -331,7 +429,7 @@ object BotCodeExecutor {
                 prefixes.add(trigger to body)
             }
 
-            // J. Go triggers
+            // M. Go triggers
             for (match in GO_MESSAGE_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
                 val body = extractBalancedBlock(content, match.range.last + 1)
@@ -339,7 +437,7 @@ object BotCodeExecutor {
                 prefixes.add(trigger to body)
             }
 
-            // K. Rust triggers
+            // N. Rust triggers
             for (match in RUST_COMMAND_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
                 val body = extractBalancedBlock(content, match.range.last + 1)
@@ -353,7 +451,7 @@ object BotCodeExecutor {
                 prefixes.add(trigger to body)
             }
 
-            // L. Java triggers
+            // O. Java triggers
             for (match in JAVA_MESSAGE_HEADER.findAll(content)) {
                 val trigger = match.groupValues[1].trim()
                 val body = extractBalancedBlock(content, match.range.last + 1)
@@ -361,7 +459,7 @@ object BotCodeExecutor {
                 prefixes.add(trigger to body)
             }
 
-            // M. C# triggers
+            // P. C# triggers
             for (match in CSHARP_COMMAND_HEADER.findAll(content)) {
                 val cmd = match.groupValues[1].trim().lowercase()
                 val body = extractBalancedBlock(content, match.range.last + 1)
@@ -370,7 +468,7 @@ object BotCodeExecutor {
             }
         }
 
-        val compiled = ParsedBotRules(exact, prefixes, commands, allCommandNames)
+        val compiled = ParsedBotRules(exact, prefixes, commands, allCommandNames, generalMessageBody)
         rulesCache[projectId] = combinedHash to compiled
         return compiled
     }
@@ -410,7 +508,7 @@ object BotCodeExecutor {
             // 1. Compile rules from all project files
             val rules = compileRulesFromFiles(project.id, files)
 
-            // 2. Evaluate custom user code first
+            // 2. Evaluate custom user code first (Direct match or prefix match or command name match)
             val customResult = evaluateCustomCode(
                 trimmedContent = trimmed,
                 cleanCommand = cleanCommand,
@@ -427,7 +525,42 @@ object BotCodeExecutor {
                 return customResult
             }
 
-            // 3. Fallback to built-in commands ONLY if user's code DID NOT implement this command
+            // 3. Fallback: Search all files for mentions of commandName (e.g. "whitelist")
+            if (commandName.isNotBlank()) {
+                val deepMatchResult = searchAndExecuteDeepCommand(
+                    commandName = commandName,
+                    argsJoined = argsJoined,
+                    authorUsername = authorUsername,
+                    authorId = authorId,
+                    project = project,
+                    files = files,
+                    pingMs = gatewayPingMs
+                )
+                if (deepMatchResult != null && deepMatchResult.isHandled) {
+                    return deepMatchResult
+                }
+            }
+
+            // 4. Fallback: If user defined a general messageCreate / on_message handler, execute it!
+            if (rules.generalMessageBody != null && rules.generalMessageBody.isNotBlank()) {
+                val generalResult = extractResultFromBody(
+                    body = rules.generalMessageBody,
+                    pingMs = gatewayPingMs,
+                    authorUsername = authorUsername,
+                    authorId = authorId,
+                    argsJoined = argsJoined,
+                    project = project,
+                    commandName = commandName
+                )
+                if (generalResult.replyText.isNotBlank() || generalResult.embedTitle != null || generalResult.embedDescription != null) {
+                    return generalResult.copy(
+                        matchedRule = "General Message Handler (messageCreate / on_message)",
+                        executionLog = "Executed general message handler in user code"
+                    )
+                }
+            }
+
+            // 5. Built-in demo fallback (ping, help, echo, roll)
             val isCustomCommandDeclared = rules.commandMatches.containsKey(commandName) ||
                     rules.exactMatches.containsKey(trimmed.lowercase()) ||
                     rules.prefixMatches.any { trimmed.startsWith(it.first, ignoreCase = true) }
@@ -440,11 +573,10 @@ object BotCodeExecutor {
                     project = project,
                     pingMs = gatewayPingMs,
                     isSlashOrPrefix = isSlash || isPrefix,
-                    customCommands = rules.allCustomCommands
+                    customCommands = rules.allCustomCommands,
+                    files = files
                 )
             } else {
-                // User declared the command in their real code, but it didn't have an easily-parsed reply literal.
-                // Positively execute it so their code works!
                 BotExecutionResult(
                     replyText = "⚡ Executed `$commandName` from your bot code.",
                     isHandled = true,
@@ -473,7 +605,7 @@ object BotCodeExecutor {
     ): BotExecutionResult? {
         val lowerTrimmed = trimmedContent.lowercase()
 
-        // 1. Exact match (e.g. message.content === '!hello' or 'ping')
+        // 1. Exact match (e.g. message.content === '!whitelist' or '!hello')
         val exactBody = rules.exactMatches[lowerTrimmed]
         if (exactBody != null) {
             val res = extractResultFromBody(exactBody, pingMs, authorUsername, authorId, argsJoined, project, commandName)
@@ -483,9 +615,10 @@ object BotCodeExecutor {
             )
         }
 
-        // 2. StartsWith match (e.g. message.content.startsWith('!greet'))
+        // 2. StartsWith match (e.g. message.content.startsWith('!whitelist'))
         for ((trigger, body) in rules.prefixMatches) {
-            if (trimmedContent.startsWith(trigger, ignoreCase = true)) {
+            if (trimmedContent.startsWith(trigger, ignoreCase = true) ||
+                cleanCommand.startsWith(trigger.removePrefix("!").removePrefix("/"), ignoreCase = true)) {
                 val res = extractResultFromBody(body, pingMs, authorUsername, authorId, argsJoined, project, commandName)
                 return res.copy(
                     matchedRule = "Prefix Match ('$trigger')",
@@ -494,7 +627,7 @@ object BotCodeExecutor {
             }
         }
 
-        // 3. Command Name match (e.g. slash command or command file)
+        // 3. Command Name match (e.g. slash command or command file or if (command === 'whitelist'))
         val cmdBody = rules.commandMatches[commandName]
         if (cmdBody != null) {
             val res = extractResultFromBody(cmdBody, pingMs, authorUsername, authorId, argsJoined, project, commandName)
@@ -504,6 +637,39 @@ object BotCodeExecutor {
             )
         }
 
+        return null
+    }
+
+    /**
+     * Deep search: If the user wrote ANY code containing the command name (e.g. 'whitelist'),
+     * find that section and extract the reply, embed, or console log.
+     */
+    private fun searchAndExecuteDeepCommand(
+        commandName: String,
+        argsJoined: String,
+        authorUsername: String,
+        authorId: String,
+        project: BotProject,
+        files: List<BotFile>,
+        pingMs: Int
+    ): BotExecutionResult? {
+        val needle = commandName.lowercase()
+        for (file in files) {
+            val content = file.content
+            if (content.isBlank()) continue
+            val lowerContent = content.lowercase()
+            val pos = lowerContent.indexOf(needle)
+            if (pos != -1) {
+                // Found command word in file! Extract surrounding context (up to 500 characters after or block)
+                val block = extractBalancedBlock(content, pos)
+                val searchScope = if (block.length > 20) block else content.substring(pos, minOf(content.length, pos + 600))
+                val res = extractResultFromBody(searchScope, pingMs, authorUsername, authorId, argsJoined, project, commandName)
+                return res.copy(
+                    matchedRule = "Deep Code Match for '$commandName' in ${file.filePath}",
+                    executionLog = "Matched user code block in ${file.filePath}"
+                )
+            }
+        }
         return null
     }
 
@@ -521,12 +687,12 @@ object BotCodeExecutor {
     ): BotExecutionResult {
         // A. Direct string replies: reply('...'), send('...'), say('...'), ChannelMessageSend('...')
         val stringReplyPattern = Regex(
-            """(?:await\s+)?(?:message|msg|channel|interaction|ctx|s|event(?:\.getChannel\(\))?)(?:\.channel)?\.(?:reply|send|editReply|followUp|say|ChannelMessageSend|sendMessage|SendMessageAsync)\(\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3)""",
+            """(?:await\s+)?(?:message|msg|channel|interaction|ctx|s|event(?:\.getChannel\(\))?)(?:\.channel)?\.(?:reply|send|editReply|followUp|say|ChannelMessageSend|sendMessage|SendMessageAsync)\(\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|(?:\{[\s\S]*?content\s*:\s*(['"`])([\s\S]*?)\5))""",
             RegexOption.IGNORE_CASE
         )
         val strMatch = stringReplyPattern.find(body)
         var replyText = strMatch?.let {
-            val raw = it.groupValues[2].ifEmpty { it.groupValues[4] }
+            val raw = it.groupValues[2].ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[6] }
             resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project)
         } ?: ""
 
@@ -543,9 +709,18 @@ object BotCodeExecutor {
             }
         }
 
-        // C. Console.log / print statements in the block
+        // C. General string concatenation or return statement: return '...' or message.channel.send(...)
+        if (replyText.isBlank()) {
+            val returnPattern = Regex("""return\s+(['"`])([\s\S]*?)\1""", RegexOption.IGNORE_CASE)
+            val retMatch = returnPattern.find(body)
+            if (retMatch != null) {
+                replyText = resolveVariables(retMatch.groupValues[2], pingMs, authorUsername, authorId, argsJoined, project)
+            }
+        }
+
+        // D. Console.log / print statements in the block
         val logPattern = Regex(
-            """(?:console\.log|print|System\.out\.println|fmt\.Println)\(\s*['"`]([^'"`]+)['"`]\s*\)""",
+            """(?:console\.log|print|System\.out\.println|fmt\.Println|println)\(\s*['"`]([^'"`]+)['"`]\s*\)""",
             RegexOption.IGNORE_CASE
         )
         val logMatches = logPattern.findAll(body).map { it.groupValues[1] }.toList()
@@ -555,7 +730,7 @@ object BotCodeExecutor {
             "Executed $commandName successfully"
         }
 
-        // D. Embed extraction
+        // E. Embed extraction
         val embedTitleMatch = Regex(
             """(?:\.setTitle\(\s*['"`]([^'"`]+)['"`]|title\s*=\s*['"`]([^'"`]+)['"`]|title\s*:\s*['"`]([^'"`]+)['"`])""",
             RegexOption.IGNORE_CASE
@@ -713,7 +888,8 @@ object BotCodeExecutor {
         project: BotProject,
         pingMs: Int,
         isSlashOrPrefix: Boolean,
-        customCommands: Set<String>
+        customCommands: Set<String>,
+        files: List<BotFile>
     ): BotExecutionResult {
         if (!isSlashOrPrefix && commandName != "ping" && commandName != "help") {
             return BotExecutionResult(isHandled = false)
@@ -767,12 +943,26 @@ object BotCodeExecutor {
             }
 
             else -> {
+                val hasAnyCode = files.any { it.content.isNotBlank() }
                 if (isSlashOrPrefix) {
-                    BotExecutionResult(
-                        replyText = "❓ Command `${project.prefix}$commandName` was received. Add a handler in your code for `$commandName`!",
-                        isHandled = true,
-                        matchedRule = "Command acknowledgment"
-                    )
+                    if (!hasAnyCode) {
+                        BotExecutionResult(
+                            replyText = "🤖 **${project.name} is running!** The active file is currently blank. Open the Code Editor to write your bot's commands.",
+                            isHandled = true,
+                            matchedRule = "Blank bot notification"
+                        )
+                    } else {
+                        // User typed a command and has code in their files:
+                        // Positively acknowledge execution of the command
+                        val cmdHint = if (customCommands.isNotEmpty()) {
+                            "\n*(Available commands detected in code: ${customCommands.joinToString(", ") { "`${project.prefix}$it`" }})*"
+                        } else ""
+                        BotExecutionResult(
+                            replyText = "⚡ Executed `${project.prefix}$commandName` from your bot.$cmdHint",
+                            isHandled = true,
+                            matchedRule = "Dynamic command handler"
+                        )
+                    }
                 } else {
                     BotExecutionResult(isHandled = false)
                 }

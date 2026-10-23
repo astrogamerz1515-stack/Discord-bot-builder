@@ -155,6 +155,7 @@ class BotRuntimeEngine(
     private var currentProjectId: Long = 0L
     private var activeProject: BotProject? = null
     private var isResuming = false
+    @Volatile private var isIntentionalSocketClose = false
 
     // Sharding & Rate Limit Counters
     private var shardId: Int = 0
@@ -416,8 +417,11 @@ class BotRuntimeEngine(
 
         // Cancel previous stale socket if any
         try {
+            isIntentionalSocketClose = true
             discordWebSocket?.cancel()
-        } catch (e: Exception) {}
+        } catch (e: Exception) {} finally {
+            isIntentionalSocketClose = false
+        }
 
         discordWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -432,6 +436,7 @@ class BotRuntimeEngine(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (isIntentionalSocketClose) return
                 isConnectingGateway.set(false)
                 _isRealDiscordConnected.value = false
                 _botStatusText.value = "Connection Interrupted (Auto-reconnecting...)"
@@ -440,8 +445,11 @@ class BotRuntimeEngine(
                 logAsync(project.id, "❌ [GATEWAY ERROR] Network failure (HTTP $code): $errMsg", "STDERR")
 
                 try {
+                    isIntentionalSocketClose = true
                     webSocket.cancel()
-                } catch (e: Exception) {}
+                } catch (e: Exception) {} finally {
+                    isIntentionalSocketClose = false
+                }
 
                 // Continuous auto-reconnect with safe exponential backoff
                 scheduleAutoReconnect(project, "Network failure ($errMsg)")
@@ -452,6 +460,7 @@ class BotRuntimeEngine(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (isIntentionalSocketClose) return
                 isConnectingGateway.set(false)
                 handleGatewayClose(code, reason, project)
             }
@@ -926,17 +935,22 @@ class BotRuntimeEngine(
 
             var missedAcks = 0
             while (isActive && _isRunning.value) {
-                // Zombie connection detection: Require 2 missed ACKs before closing socket
-                // (prevents dropping connections during brief screen lock or app switching transitions)
+                // Generous tolerance: Allow up to 5 missed cycles (>3.5 minutes) before suspecting connection loss
+                // This prevents false disconnects and crash/revive loops during Android sleep, screen lock, and Doze mode
                 if (isAwaitingAck) {
-                    missedAcks++
-                    if (missedAcks >= 2) {
-                        logAsync(projectId, "🧟 [ZOMBIE DETECTED] Heartbeat ACK missing ($missedAcks cycles). Reconnecting session...", "WARN")
-                        try {
-                            webSocket.close(4000, "Heartbeat ACK missing")
-                        } catch (e: Exception) {}
-                        scheduleAutoReconnect(activeProject ?: return@launch, "Zombie connection (ACK missing)")
-                        break
+                    val timeSinceLastAck = System.currentTimeMillis() - lastHeartbeatAckAt
+                    if (timeSinceLastAck > heartbeatIntervalMs * 3) {
+                        missedAcks++
+                        if (missedAcks >= 5) {
+                            logAsync(projectId, "⚠️ [HEARTBEAT] Connection silent for >3 minutes. Smoothly resuming session...", "WARN")
+                            isIntentionalSocketClose = true
+                            try {
+                                webSocket.close(4000, "Heartbeat resume")
+                            } catch (_: Exception) {}
+                            isIntentionalSocketClose = false
+                            scheduleAutoReconnect(activeProject ?: return@launch, "Silent connection recovery")
+                            break
+                        }
                     }
                 } else {
                     missedAcks = 0
@@ -1149,7 +1163,7 @@ class BotRuntimeEngine(
         val customCommands = BotCodeExecutor.extractAllCommandNames(allCode)
 
         val builtIns = setOf("ping", "help", "embed", "userinfo", "roll")
-        val allCommandsToRegister = (builtIns + customCommands).filter { it.isNotBlank() }
+        val allCommandsToRegister: List<String> = (builtIns + customCommands).filter { cmd: String -> cmd.isNotBlank() }
 
         val commandsArray = JSONArray().apply {
             for (cmd in allCommandsToRegister) {
@@ -1381,7 +1395,14 @@ class BotRuntimeEngine(
 
             repository.addTerminalLog(project.id, "[SIMULATOR MSG] @Developer in #bot-testing: '$trimmed'", "STDOUT")
 
-            val files = repository.getFilesDirect(project.id)
+            val files = if (cachedProjectId == project.id && !cachedFiles.isNullOrEmpty()) {
+                cachedFiles!!
+            } else {
+                val direct = repository.getFilesDirect(project.id)
+                cachedFiles = direct
+                cachedProjectId = project.id
+                direct
+            }
             val result = BotCodeExecutor.executeIncomingMessage(
                 messageContent = trimmed,
                 authorUsername = "Developer",
