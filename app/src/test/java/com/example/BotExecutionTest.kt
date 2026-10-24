@@ -281,6 +281,127 @@ class BotExecutionTest {
     }
 
     @Test
+    fun testRegexCommandExecutionWithEmbedFields() = runBlocking {
+        val project = BotProject(name = "RegexBot", description = "Test", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 4,
+                filePath = "index.js",
+                isEntrypoint = true,
+                content = """
+                    client.on('messageCreate', async (message) => {
+                        if (/^!serverinfo/i.test(message.content)) {
+                            const embed = new EmbedBuilder()
+                                .setTitle(`${'$'}{message.guild.name} Server Info`)
+                                .setDescription('Welcome to the server!')
+                                .addFields(
+                                    { name: 'Server Name', value: message.guild.name, inline: true },
+                                    { name: 'Total Members', value: `${'$'}{message.guild.memberCount}`, inline: true }
+                                );
+                            await message.reply({ embeds: [embed] });
+                        }
+                    });
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!serverinfo",
+            authorUsername = "Owner",
+            authorId = "1001",
+            project = project,
+            files = files,
+            gatewayPingMs = 18,
+            guildName = "Aegis Realm",
+            guildId = "987654321",
+            guildMemberCount = 250
+        )
+
+        assertTrue(result.isHandled)
+        assertTrue(result.embedTitle?.contains("Aegis Realm") == true)
+        assertEquals("Welcome to the server!", result.embedDescription)
+        assertTrue(result.embedFields.isNotEmpty())
+        assertEquals("Server Name", result.embedFields[0].first)
+        assertEquals("Aegis Realm", result.embedFields[0].second)
+        assertEquals("Total Members", result.embedFields[1].first)
+        assertEquals("250", result.embedFields[1].second)
+    }
+
+    @Test
+    fun testPythonRegexAndAddField() = runBlocking {
+        val project = BotProject(name = "PyBot", description = "Test", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 5,
+                filePath = "bot.py",
+                isEntrypoint = true,
+                content = """
+                    import re
+                    @client.event
+                    async def on_message(message):
+                        if re.search(r"^!serverinfo", message.content):
+                            embed = discord.Embed(title=f"{message.guild.name} Stats")
+                            embed.add_field(name="Owner", value="Admin", inline=True)
+                            await message.channel.send(embed=embed)
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!serverinfo",
+            authorUsername = "Tester",
+            authorId = "2002",
+            project = project,
+            files = files,
+            gatewayPingMs = 22,
+            guildName = "Python Guild"
+        )
+
+        assertTrue(result.isHandled)
+        assertTrue(result.embedTitle?.contains("Python Guild") == true)
+        assertTrue(result.embedFields.any { it.first == "Owner" && it.second == "Admin" })
+    }
+
+    @Test
+    fun testNeverOutputGenericFallbackForServerInfo() = runBlocking {
+        val project = BotProject(name = "FallbackCheckBot", description = "Test", prefix = "!")
+        // Even if user only wrote an empty or minimal serverinfo handler
+        val files = listOf(
+            BotFile(
+                projectId = 6,
+                filePath = "index.js",
+                isEntrypoint = true,
+                content = """
+                    client.on('messageCreate', (message) => {
+                        if (message.content === '!serverinfo') {
+                            // Custom user code without hardcoded string
+                        }
+                    });
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!serverinfo",
+            authorUsername = "User",
+            authorId = "3003",
+            project = project,
+            files = files,
+            gatewayPingMs = 25,
+            guildName = "My Discord Server",
+            guildMemberCount = 105
+        )
+
+        assertTrue(result.isHandled)
+        // Must NOT return the old annoying string
+        assertTrue(!result.replyText.contains("Executed serverinfo from your bot code"))
+        // Must return rich server info embed with guild properties
+        assertTrue(result.embedTitle != null && result.embedTitle!!.contains("My Discord Server"))
+        assertTrue(result.embedFields.any { it.first == "Server Name" && it.second == "My Discord Server" })
+        assertTrue(result.embedFields.any { it.first == "Total Members" && it.second.contains("105") })
+    }
+
+    @Test
     fun testBalancedBlockExtractorHandlesNestedObjects() {
         val code = """
             if (commandName === 'test') {

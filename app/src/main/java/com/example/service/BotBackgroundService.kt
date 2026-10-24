@@ -205,8 +205,13 @@ class BotBackgroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                shutdownBotAndService()
-                return START_NOT_STICKY
+                val prefs = getPrefs(this)
+                // Guard against race conditions where the user immediately restarted or marked running
+                if (!prefs.getBoolean(PREF_IS_RUNNING, false)) {
+                    shutdownBotAndService()
+                    return START_NOT_STICKY
+                }
+                return START_STICKY
             }
             ACTION_START, null -> {
                 val prefs = getPrefs(this)

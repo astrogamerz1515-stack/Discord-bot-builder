@@ -584,9 +584,6 @@ fun HomeScreen(
                                 viewModel.stopBotProcess()
                                 Toast.makeText(context, "Bot '${project.name}' stopped", Toast.LENGTH_SHORT).show()
                             } else {
-                                if (isRunning) {
-                                    viewModel.stopBotProcess()
-                                }
                                 viewModel.selectProject(project)
                                 viewModel.startBotProcess()
                                 Toast.makeText(context, "Bot '${project.name}' running in background 24/7", Toast.LENGTH_SHORT).show()

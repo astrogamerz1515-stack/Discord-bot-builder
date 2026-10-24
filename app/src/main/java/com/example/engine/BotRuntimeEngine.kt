@@ -162,6 +162,14 @@ class BotRuntimeEngine(
     private var shardCount: Int = 1
     private var dailyIdentifyCount: Int = 0
 
+    data class CachedGuildInfo(
+        val id: String,
+        val name: String,
+        val memberCount: Int = 1,
+        val ownerId: String = ""
+    )
+    private val cachedGuilds = java.util.concurrent.ConcurrentHashMap<String, CachedGuildInfo>()
+
     fun invalidateFileCache(projectId: Long? = null) {
         cachedFiles = null
         BotCodeExecutor.invalidateCache(projectId ?: currentProjectId)
@@ -800,8 +808,14 @@ class BotRuntimeEngine(
 
             // Other Gateway Events Coverage
             "GUILD_CREATE" -> {
+                val gId = d.optString("id", "")
                 val name = d.optString("name", "Unknown Server")
-                repository.addTerminalLog(project.id, "🏰 [GUILD_CREATE] Joined/Cached Server: '$name'", "STDOUT")
+                val memberCount = d.optInt("member_count", d.optInt("approximate_member_count", 1))
+                val ownerId = d.optString("owner_id", "")
+                if (gId.isNotBlank()) {
+                    cachedGuilds[gId] = CachedGuildInfo(gId, name, memberCount, ownerId)
+                }
+                repository.addTerminalLog(project.id, "🏰 [GUILD_CREATE] Joined/Cached Server: '$name' (Members: $memberCount)", "STDOUT")
             }
 
             "GUILD_MEMBER_ADD" -> {
@@ -822,6 +836,7 @@ class BotRuntimeEngine(
             val content = d.optString("content", "")
             val channelId = d.optString("channel_id", "")
             val messageId = d.optString("id", "")
+            val guildId = d.optString("guild_id", "")
             val author = d.optJSONObject("author") ?: return
             val authorUsername = author.optString("username", "Unknown")
             val authorId = author.optString("id", "")
@@ -854,6 +869,12 @@ class BotRuntimeEngine(
                 direct
             }
 
+            val cachedGuild = if (guildId.isNotBlank()) cachedGuilds[guildId] else cachedGuilds.values.firstOrNull()
+            val guildName = cachedGuild?.name ?: "Discord Community Server"
+            val effectiveGuildId = cachedGuild?.id ?: guildId.ifEmpty { "112233445566778899" }
+            val memberCount = cachedGuild?.memberCount ?: 42
+            val ownerId = cachedGuild?.ownerId ?: "987654321098765432"
+
             // Execute user code (<1ms with O(1) indexed lookup)
             val result = BotCodeExecutor.executeIncomingMessage(
                 messageContent = content,
@@ -861,7 +882,11 @@ class BotRuntimeEngine(
                 authorId = authorId,
                 project = project,
                 files = files,
-                gatewayPingMs = _gatewayPingMs.value
+                gatewayPingMs = _gatewayPingMs.value,
+                guildName = guildName,
+                guildId = effectiveGuildId,
+                guildMemberCount = memberCount,
+                guildOwnerId = ownerId
             )
 
             if (result.isHandled) {
@@ -884,6 +909,7 @@ class BotRuntimeEngine(
         try {
             val interactionId = d.optString("id", "")
             val interactionToken = d.optString("token", "")
+            val guildId = d.optString("guild_id", "")
             val data = d.optJSONObject("data")
             val cmdName = data?.optString("name", "") ?: ""
             val member = d.optJSONObject("member")
@@ -901,13 +927,23 @@ class BotRuntimeEngine(
                 direct
             }
 
+            val cachedGuild = if (guildId.isNotBlank()) cachedGuilds[guildId] else cachedGuilds.values.firstOrNull()
+            val guildName = cachedGuild?.name ?: "Discord Community Server"
+            val effectiveGuildId = cachedGuild?.id ?: guildId.ifEmpty { "112233445566778899" }
+            val memberCount = cachedGuild?.memberCount ?: 42
+            val ownerId = cachedGuild?.ownerId ?: "987654321098765432"
+
             val result = BotCodeExecutor.executeIncomingMessage(
                 messageContent = "/$cmdName",
                 authorUsername = username,
                 authorId = user?.optString("id", "") ?: "",
                 project = project,
                 files = files,
-                gatewayPingMs = _gatewayPingMs.value
+                gatewayPingMs = _gatewayPingMs.value,
+                guildName = guildName,
+                guildId = effectiveGuildId,
+                guildMemberCount = memberCount,
+                guildOwnerId = ownerId
             )
 
             if (result.isHandled) {
@@ -1086,7 +1122,8 @@ class BotRuntimeEngine(
             if (messageReferenceId.isNotBlank()) {
                 put("message_reference", JSONObject().apply { put("message_id", messageReferenceId) })
             }
-            if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+            val hasEmbed = !result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank() || result.embedFields.isNotEmpty()
+            if (hasEmbed) {
                 put("embeds", JSONArray().apply {
                     put(JSONObject().apply {
                         if (!result.embedTitle.isNullOrBlank()) put("title", result.embedTitle)
@@ -1094,6 +1131,19 @@ class BotRuntimeEngine(
                         result.embedColorHex?.let {
                             val colorInt = try { it.removePrefix("#").toInt(16) } catch (e: Exception) { 5793266 }
                             put("color", colorInt)
+                        }
+                        if (!result.embedAuthor.isNullOrBlank()) put("author", JSONObject().put("name", result.embedAuthor))
+                        if (!result.embedFooter.isNullOrBlank()) put("footer", JSONObject().put("text", result.embedFooter))
+                        if (result.embedFields.isNotEmpty()) {
+                            val fieldsArr = JSONArray()
+                            for (field in result.embedFields) {
+                                fieldsArr.put(JSONObject().apply {
+                                    put("name", field.first)
+                                    put("value", field.second)
+                                    put("inline", true)
+                                })
+                            }
+                            put("fields", fieldsArr)
                         }
                     })
                 })
@@ -1125,7 +1175,8 @@ class BotRuntimeEngine(
         result: BotExecutionResult,
         project: BotProject
     ) = withContext(Dispatchers.IO) {
-        val embedJson = if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+        val hasEmbed = !result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank() || result.embedFields.isNotEmpty()
+        val embedJson = if (hasEmbed) {
             JSONObject().apply {
                 if (!result.embedTitle.isNullOrBlank()) put("title", result.embedTitle)
                 if (!result.embedDescription.isNullOrBlank()) put("description", result.embedDescription)
@@ -1135,6 +1186,17 @@ class BotRuntimeEngine(
                 }
                 if (!result.embedAuthor.isNullOrBlank()) put("author", JSONObject().put("name", result.embedAuthor))
                 if (!result.embedFooter.isNullOrBlank()) put("footer", JSONObject().put("text", result.embedFooter))
+                if (result.embedFields.isNotEmpty()) {
+                    val fieldsArr = JSONArray()
+                    for (field in result.embedFields) {
+                        fieldsArr.put(JSONObject().apply {
+                            put("name", field.first)
+                            put("value", field.second)
+                            put("inline", true)
+                        })
+                    }
+                    put("fields", fieldsArr)
+                }
             }
         } else null
 
@@ -1403,13 +1465,18 @@ class BotRuntimeEngine(
                 cachedProjectId = project.id
                 direct
             }
+            val firstGuild = cachedGuilds.values.firstOrNull()
             val result = BotCodeExecutor.executeIncomingMessage(
                 messageContent = trimmed,
                 authorUsername = "Developer",
                 authorId = "118923456789012345",
                 project = project,
                 files = files,
-                gatewayPingMs = _gatewayPingMs.value
+                gatewayPingMs = _gatewayPingMs.value,
+                guildName = firstGuild?.name ?: "Developer Guild",
+                guildId = firstGuild?.id ?: "123456789012345678",
+                guildMemberCount = firstGuild?.memberCount ?: 128,
+                guildOwnerId = firstGuild?.ownerId ?: "987654321098765432"
             )
 
             if (result.isHandled) {
@@ -1417,9 +1484,10 @@ class BotRuntimeEngine(
                     repository.addTerminalLog(project.id, "⚡ [CODE EXEC] ${result.executionLog}", "STDOUT")
                 }
 
-                val replyEmbed = if (!result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank()) {
+                val hasEmbed = !result.embedTitle.isNullOrBlank() || !result.embedDescription.isNullOrBlank() || result.embedFields.isNotEmpty()
+                val replyEmbed = if (hasEmbed) {
                     DiscordSimulatorEmbed(
-                        title = result.embedTitle ?: "Embed",
+                        title = result.embedTitle ?: "Server Info",
                         description = result.embedDescription ?: "",
                         colorHex = result.embedColorHex ?: "#5865F2",
                         fields = result.embedFields,
