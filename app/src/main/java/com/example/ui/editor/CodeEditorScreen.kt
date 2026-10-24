@@ -1,8 +1,10 @@
 package com.example.ui.editor
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,6 +60,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CenterFocusStrong
@@ -170,6 +173,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
     val showBottomNavInEditor by viewModel.showBottomNavInEditor.collectAsState()
     val pm2Processes by com.example.engine.Pm2ProcessManager.processes.collectAsState()
 
+    // Large File Streaming & Paging Engine States
+    val isLargeFileMode by viewModel.isLargeFileMode.collectAsState()
+    val largeFileLineIndex by viewModel.largeFileLineIndex.collectAsState()
+    val currentLargeFilePage by viewModel.currentLargeFilePage.collectAsState()
+    val isLargeFileLoading by viewModel.isLargeFileLoading.collectAsState()
+    val largeFilePageSize by viewModel.largeFilePageSize.collectAsState()
+    var textSyncJob by remember { mutableStateOf<Job?>(null) }
+
     var showFilesSheet by remember { mutableStateOf(false) }
     var showDiagnosticsPanel by remember { mutableStateOf(false) }
     var showIntelliSenseExplorer by remember { mutableStateOf(false) }
@@ -194,6 +205,21 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+
+    // Launcher for selecting system folder destination and auto-exporting ZIP
+    val folderTreeExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        val proj = project
+        if (treeUri != null && proj != null) {
+            viewModel.setDefaultExportTreeUri(context, treeUri)
+            val folderName = viewModel.getExportFolderDisplayName(context, treeUri)
+            Toast.makeText(context, "📁 Export folder set to '$folderName'. Exporting ZIP...", Toast.LENGTH_SHORT).show()
+            viewModel.exportProjectToTree(proj, treeUri, context) { _, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     // Launcher for exporting project to ZIP from editor
     val zipExportLauncher = rememberLauncherForActivityResult(
@@ -301,6 +327,18 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             val currentContent = activeFile?.content ?: viewModel.activeFileContent.value
             textFieldValue = TextFieldValue(currentContent, TextRange(currentContent.length))
             lastEditorText = currentContent
+            undoStack.clear()
+            redoStack.clear()
+            inlineDismissedOffset = -1
+        }
+    }
+
+    // Reset editor text when page changes in Large File Mode
+    LaunchedEffect(currentLargeFilePage?.pageIndex, currentLargeFilePage?.startLineNumber) {
+        val page = currentLargeFilePage
+        if (isLargeFileMode && page != null) {
+            textFieldValue = TextFieldValue(page.text, TextRange(0))
+            lastEditorText = page.text
             undoStack.clear()
             redoStack.clear()
             inlineDismissedOffset = -1
@@ -787,6 +825,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             if (isRunning) {
                 Button(
                     onClick = {
+                        textSyncJob?.cancel()
                         viewModel.updateActiveFileContent(textFieldValue.text)
                         viewModel.saveActiveFile()
                         viewModel.hotReload()
@@ -824,6 +863,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     if (isRunning) {
                         viewModel.stopBotProcess()
                     } else {
+                        textSyncJob?.cancel()
                         viewModel.updateActiveFileContent(textFieldValue.text)
                         viewModel.saveActiveFile()
                         viewModel.startBotProcess()
@@ -1353,7 +1393,11 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 color = DiscordHover,
                 shape = RoundedCornerShape(4.dp),
                 modifier = Modifier
-                    .clickable { viewModel.saveActiveFile() }
+                    .clickable {
+                        textSyncJob?.cancel()
+                        viewModel.updateActiveFileContent(textFieldValue.text)
+                        viewModel.saveActiveFile()
+                    }
                     .testTag("btn_save_code_file")
             ) {
                 Row(
@@ -1381,7 +1425,15 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 color = DiscordHover,
                 shape = RoundedCornerShape(4.dp),
                 modifier = Modifier
-                    .clickable { showExportDialog = true }
+                    .clickable {
+                        val savedFolder = viewModel.getDefaultExportTreeUri(context)
+                        if (savedFolder == null) {
+                            // First time: takes user to system files to set folder, and auto-exports upon selection
+                            folderTreeExportLauncher.launch(null)
+                        } else {
+                            showExportDialog = true
+                        }
+                    }
                     .testTag("btn_export_code_file")
             ) {
                 Row(
@@ -1437,8 +1489,13 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val displayGlobalLine = if (isLargeFileMode) {
+                        (currentLargeFilePage?.startLineNumber ?: 1) - 1 + currentLineAndCol.first
+                    } else {
+                        currentLineAndCol.first
+                    }
                     Text(
-                        text = "🎯 Ln ${currentLineAndCol.first}:${currentLineAndCol.second} (Go to)",
+                        text = "🎯 Ln $displayGlobalLine:${currentLineAndCol.second} (Go to)",
                         color = DiscordBlurple,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
@@ -1580,6 +1637,147 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             )
         }
 
+        // Large File Stream & Paging Control Bar
+        if (isLargeFileMode && largeFileLineIndex != null) {
+            val fileIndex = largeFileLineIndex!!
+            val currentPageIdx = currentLargeFilePage?.pageIndex ?: 0
+            val totalPages = maxOf(1, fileIndex.pageCount)
+            val startLine = currentLargeFilePage?.startLineNumber ?: 1
+            val endLine = currentLargeFilePage?.endLineNumber ?: minOf(startLine + largeFilePageSize - 1, fileIndex.totalLines)
+            val fileSizeFormatted = com.example.util.LargeFileEngine.formatFileSize(fileIndex.fileSizeBytes)
+
+            Surface(
+                color = DiscordSurface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, DiscordBlurple.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(DiscordBlurple, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "⚡ Large File Stream ($fileSizeFormatted • ${fileIndex.totalLines} lines)",
+                                color = DiscordTextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (isLargeFileLoading) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = DiscordBlurple
+                            )
+                        } else {
+                            Text(
+                                text = "Page ${currentPageIdx + 1} of $totalPages (Lines $startLine–$endLine)",
+                                color = DiscordTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Prev Page button
+                        Button(
+                            onClick = {
+                                if (currentPageIdx > 0) {
+                                    textSyncJob?.cancel()
+                                    viewModel.updateActiveFileContent(textFieldValue.text)
+                                    viewModel.loadLargeFilePage(currentPageIdx - 1)
+                                }
+                            },
+                            enabled = currentPageIdx > 0 && !isLargeFileLoading,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DiscordElevated,
+                                disabledContainerColor = DiscordDarker
+                            ),
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = if (currentPageIdx > 0) DiscordTextPrimary else DiscordTextMuted, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Prev Page", color = if (currentPageIdx > 0) DiscordTextPrimary else DiscordTextMuted, fontSize = 11.sp)
+                        }
+
+                        // Next Page button
+                        Button(
+                            onClick = {
+                                if (currentPageIdx < totalPages - 1) {
+                                    textSyncJob?.cancel()
+                                    viewModel.updateActiveFileContent(textFieldValue.text)
+                                    viewModel.loadLargeFilePage(currentPageIdx + 1)
+                                }
+                            },
+                            enabled = currentPageIdx < totalPages - 1 && !isLargeFileLoading,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DiscordElevated,
+                                disabledContainerColor = DiscordDarker
+                            ),
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("Next Page", color = if (currentPageIdx < totalPages - 1) DiscordTextPrimary else DiscordTextMuted, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = if (currentPageIdx < totalPages - 1) DiscordTextPrimary else DiscordTextMuted, modifier = Modifier.size(12.dp))
+                        }
+
+                        // Jump to Line button
+                        Button(
+                            onClick = { showGoToLineDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple.copy(alpha = 0.2f)),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, DiscordBlurple),
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("Jump to Line", color = DiscordBlurple, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        // Save Page Button
+                        Button(
+                            onClick = {
+                                textSyncJob?.cancel()
+                                viewModel.updateActiveFileContent(textFieldValue.text)
+                                viewModel.saveActiveFile()
+                                Toast.makeText(context, "💾 Saved Page ${currentPageIdx + 1} to disk!", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Save Page", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // Code Editor Body with Line Numbers
         if (files.isEmpty()) {
             Box(
@@ -1637,12 +1835,13 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 }
             }
         } else {
+            val effectiveLineOffset = if (isLargeFileMode) (currentLargeFilePage?.startLineNumber ?: 1) - 1 else 0
             val displayLineCount = minOf(lineCount, 5000)
-            val lineNumbersString = remember(displayLineCount, lineCount) {
-                val sb = StringBuilder(displayLineCount * 6)
+            val lineNumbersString = remember(displayLineCount, lineCount, effectiveLineOffset) {
+                val sb = StringBuilder(displayLineCount * 8)
                 for (i in 1..displayLineCount) {
                     if (i > 1) sb.append('\n')
-                    sb.append(i)
+                    sb.append(effectiveLineOffset + i)
                 }
                 if (lineCount > displayLineCount) {
                     sb.append("\n...")
@@ -1788,7 +1987,8 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 ) {
                     // Line numbers column with active line highlight and error indicators
                     val errorLines = remember(diagnostics) { diagnostics.map { it.lineNumber }.toSet() }
-                    val lineDigits = remember(lineCount) { lineCount.toString().length }
+                    val maxDisplayLine = effectiveLineOffset + lineCount
+                    val lineDigits = remember(maxDisplayLine) { maxDisplayLine.toString().length }
                     val gutterWidth = remember(lineDigits, fontScale) {
                         (maxOf(36f, lineDigits * 9f + 20f) * fontScale).dp
                     }
@@ -1838,7 +2038,8 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                 horizontalAlignment = Alignment.End
                             ) {
                                 for (i in 1..lineCount) {
-                                    val hasError = errorLines.contains(i)
+                                    val globalLine = effectiveLineOffset + i
+                                    val hasError = errorLines.contains(globalLine)
                                     val isCurrentLine = i == currentLineAndCol.first
 
                                     Row(
@@ -1870,7 +2071,7 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                                             )
                                         }
                                         Text(
-                                            text = "$i",
+                                            text = "$globalLine",
                                             color = if (hasError) DiscordRed
                                             else if (isCurrentLine) DiscordBlurple
                                             else DiscordTextMuted,
@@ -1943,7 +2144,11 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                             onValueChange = { newValue ->
                                 lastEditorText = newValue.text
                                 textFieldValue = newValue
-                                viewModel.updateActiveFileContent(newValue.text)
+                                textSyncJob?.cancel()
+                                textSyncJob = editorScope.launch {
+                                    delay(160)
+                                    viewModel.updateActiveFileContent(newValue.text)
+                                }
                             },
                             visualTransformation = syntaxTransformation,
                             textStyle = TextStyle(
@@ -2437,7 +2642,13 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
 
     // Go To Line (Caret Tracker Jump) Dialog
     if (showGoToLineDialog) {
-        var inputLine by remember { mutableStateOf("${currentLineAndCol.first}") }
+        val totalGlobalLines = if (isLargeFileMode) (largeFileLineIndex?.totalLines ?: lineCount) else lineCount
+        val currentGlobalLine = if (isLargeFileMode) {
+            (currentLargeFilePage?.startLineNumber ?: 1) - 1 + currentLineAndCol.first
+        } else {
+            currentLineAndCol.first
+        }
+        var inputLine by remember { mutableStateOf("$currentGlobalLine") }
         AlertDialog(
             onDismissRequest = { showGoToLineDialog = false },
             containerColor = DiscordSurface,
@@ -2452,14 +2663,14 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Current Caret: Line ${currentLineAndCol.first}, Column ${currentLineAndCol.second} (Total: $lineCount lines)",
+                        text = "Current Caret: Line $currentGlobalLine, Column ${currentLineAndCol.second} (Total: $totalGlobalLines lines)",
                         color = DiscordTextSecondary,
                         fontSize = 12.sp
                     )
                     OutlinedTextField(
                         value = inputLine,
                         onValueChange = { inputLine = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("Line Number (1 - $lineCount)") },
+                        label = { Text("Line Number (1 - $totalGlobalLines)") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -2479,11 +2690,17 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 Button(
                     onClick = {
                         val target = inputLine.toIntOrNull()
-                        if (target != null && target in 1..lineCount) {
-                            moveCursorToLine(target)
+                        if (target != null && target in 1..totalGlobalLines) {
+                            if (isLargeFileMode) {
+                                textSyncJob?.cancel()
+                                viewModel.updateActiveFileContent(textFieldValue.text)
+                                viewModel.jumpToLargeFileLine(target)
+                            } else {
+                                moveCursorToLine(target)
+                            }
                             showGoToLineDialog = false
                         } else {
-                            Toast.makeText(context, "Please enter a valid line between 1 and $lineCount", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Please enter a valid line between 1 and $totalGlobalLines", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
@@ -2496,6 +2713,162 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                     Text("Cancel", color = DiscordTextSecondary)
                 }
             }
+        )
+    }
+
+    // Export Bot Project Dialog (Full Support for Auto-Exporting ZIP to System Files)
+    if (showExportDialog) {
+        val proj = project
+        val savedFolderUri = viewModel.getDefaultExportTreeUri(context)
+        val folderDisplayName = if (savedFolderUri != null) {
+            viewModel.getExportFolderDisplayName(context, savedFolderUri)
+        } else {
+            "System Files (Not set yet)"
+        }
+
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CloudUpload,
+                        contentDescription = null,
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Export Bot Project",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Export \"${proj?.name ?: "bot"}\" as a production ZIP archive with all your codes, files, and configuration.",
+                        color = DiscordTextSecondary,
+                        fontSize = 13.sp
+                    )
+
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "📁 System Export Folder:",
+                                color = DiscordTextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = folderDisplayName,
+                                color = DiscordGreen,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    // Button 1: Auto-Export ZIP to this Folder
+                    Button(
+                        onClick = {
+                            showExportDialog = false
+                            if (proj != null) {
+                                if (savedFolderUri != null) {
+                                    viewModel.exportProjectToTree(proj, savedFolderUri, context) { _, msg ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    folderTreeExportLauncher.launch(null)
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_confirm_auto_export_zip")
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (savedFolderUri != null) "Auto-Export ZIP to $folderDisplayName" else "Set Folder in System Files & Export",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Button 2: Choose / Change Destination Folder in System Files
+                    OutlinedButton(
+                        onClick = {
+                            showExportDialog = false
+                            folderTreeExportLauncher.launch(null)
+                        },
+                        border = BorderStroke(1.dp, DiscordBlurple.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_change_export_folder")
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Change Export Folder in System Files",
+                            color = DiscordTextPrimary,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    // Button 3: Save to specific file (Save As)
+                    OutlinedButton(
+                        onClick = {
+                            showExportDialog = false
+                            if (proj != null) {
+                                val safeName = proj.name.replace(Regex("[^a-zA-Z0-9._-]"), "_").trim('_').ifEmpty { "bot" }
+                                zipExportLauncher.launch("${safeName}.zip")
+                            }
+                        },
+                        border = BorderStroke(1.dp, DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_save_as_file")
+                    ) {
+                        Icon(Icons.Default.Code, contentDescription = null, tint = DiscordTextSecondary, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save As Single File (File Picker)", color = DiscordTextSecondary, fontSize = 12.sp)
+                    }
+
+                    // Button 4: Share via Android Share Sheet
+                    OutlinedButton(
+                        onClick = {
+                            showExportDialog = false
+                            if (proj != null) {
+                                viewModel.shareProjectZip(proj, context) { _, _ -> }
+                            }
+                        },
+                        border = BorderStroke(1.dp, DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_share_export_zip")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, tint = DiscordTextSecondary, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Share ZIP (Discord / Drive / Email)", color = DiscordTextSecondary, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) {
+                    Text("Close", color = DiscordTextSecondary)
+                }
+            },
+            shape = RoundedCornerShape(12.dp)
         )
     }
 }

@@ -11,6 +11,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -335,9 +336,10 @@ object BotZipManager {
     fun exportToZipStream(
         outputStream: OutputStream,
         project: BotProject,
-        files: List<BotFile>
+        files: List<BotFile>,
+        context: Context? = null
     ): ExportSummary {
-        val zipOut = ZipOutputStream(BufferedOutputStream(outputStream))
+        val zipOut = ZipOutputStream(BufferedOutputStream(outputStream, 32 * 1024))
         var fileCount = 0
         var totalBytes = 0L
 
@@ -396,13 +398,26 @@ object BotZipManager {
 
             for (file in finalExportFiles) {
                 val cleanPath = file.filePath.trimStart('/')
-                val bytes = file.content.toByteArray(StandardCharsets.UTF_8)
                 val entry = ZipEntry(cleanPath)
                 zipOut.putNextEntry(entry)
-                zipOut.write(bytes)
+
+                val diskFile = if (context != null) File(context.filesDir, "bot_projects/${project.id}/$cleanPath") else null
+                if (diskFile != null && diskFile.exists() && diskFile.isFile) {
+                    val buffer = ByteArray(32 * 1024)
+                    BufferedInputStream(FileInputStream(diskFile), 32 * 1024).use { bis ->
+                        var read: Int
+                        while (bis.read(buffer).also { read = it } != -1) {
+                            zipOut.write(buffer, 0, read)
+                            totalBytes += read
+                        }
+                    }
+                } else {
+                    val bytes = file.content.toByteArray(StandardCharsets.UTF_8)
+                    zipOut.write(bytes)
+                    totalBytes += bytes.size
+                }
                 zipOut.closeEntry()
                 fileCount++
-                totalBytes += bytes.size
             }
 
             zipOut.finish()

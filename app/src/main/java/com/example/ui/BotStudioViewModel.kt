@@ -178,6 +178,22 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     val showImportSummaryDialog = MutableStateFlow(false)
 
+    // Large File Streaming & Zero-Lag Paging States (15MB+ safe)
+    private val _isLargeFileMode = MutableStateFlow(false)
+    val isLargeFileMode: StateFlow<Boolean> = _isLargeFileMode.asStateFlow()
+
+    private val _largeFileLineIndex = MutableStateFlow<com.example.util.LargeFileEngine.LineIndex?>(null)
+    val largeFileLineIndex: StateFlow<com.example.util.LargeFileEngine.LineIndex?> = _largeFileLineIndex.asStateFlow()
+
+    private val _currentLargeFilePage = MutableStateFlow<com.example.util.LargeFileEngine.PageData?>(null)
+    val currentLargeFilePage: StateFlow<com.example.util.LargeFileEngine.PageData?> = _currentLargeFilePage.asStateFlow()
+
+    private val _isLargeFileLoading = MutableStateFlow(false)
+    val isLargeFileLoading: StateFlow<Boolean> = _isLargeFileLoading.asStateFlow()
+
+    private val _largeFilePageSize = MutableStateFlow(com.example.util.LargeFileEngine.DEFAULT_PAGE_SIZE)
+    val largeFilePageSize: StateFlow<Int> = _largeFilePageSize.asStateFlow()
+
     private var projectFilesJob: Job? = null
     private var terminalLogsJob: Job? = null
     private var storageJob: Job? = null
@@ -298,18 +314,57 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         // Cancel any pending debounced autosave for the previous file
         autoSaveJob?.cancel()
 
-        // Asynchronously persist any modifications on the previous file without mutating activeFile
+        // Asynchronously persist any modifications on the previous file
         if (currentFile != null) {
             val contentToSave = _activeFileContent.value
-            if (contentToSave != currentFile.content) {
+            if (_isLargeFileMode.value) {
+                saveActiveLargeFilePage(contentToSave)
+            } else if (contentToSave != currentFile.content) {
                 val fileToSave = currentFile.copy(content = contentToSave)
-                viewModelScope.launch {
+                viewModelScope.launch(Dispatchers.IO) {
                     repository.saveFile(fileToSave)
+                    val localFile = com.example.util.LargeFileEngine.getLocalFile(getApplication(), fileToSave.projectId, fileToSave.filePath)
+                    com.example.util.LargeFileEngine.writeEntireContent(localFile, contentToSave)
                 }
             }
         }
 
-        // Switch to the target file immediately
+        val localDiskFile = com.example.util.LargeFileEngine.getLocalFile(getApplication(), file.projectId, file.filePath)
+        val isLarge = (localDiskFile.exists() && localDiskFile.length() > com.example.util.LargeFileEngine.LARGE_FILE_THRESHOLD_BYTES) ||
+                file.content.length > com.example.util.LargeFileEngine.LARGE_FILE_THRESHOLD_BYTES ||
+                file.content.startsWith("[DISK_STORED_FILE:")
+
+        if (isLarge) {
+            _isLargeFileMode.value = true
+            _isLargeFileLoading.value = true
+            _activeFile.value = file
+            _saveStatus.value = "Saved (Large File Mode)"
+
+            viewModelScope.launch(Dispatchers.IO) {
+                // Ensure local disk file contains the content if not already populated
+                if (!localDiskFile.exists() || localDiskFile.length() == 0L) {
+                    if (file.content.isNotEmpty() && !file.content.startsWith("[DISK_STORED_FILE:")) {
+                        com.example.util.LargeFileEngine.writeEntireContent(localDiskFile, file.content)
+                    }
+                }
+
+                val index = com.example.util.LargeFileEngine.buildPageIndex(localDiskFile, _largeFilePageSize.value)
+                val page0 = com.example.util.LargeFileEngine.readPage(index, 0)
+                withContext(Dispatchers.Main) {
+                    _largeFileLineIndex.value = index
+                    _currentLargeFilePage.value = page0
+                    _activeFileContent.value = page0.pageText
+                    _isLargeFileLoading.value = false
+                    runDiagnostics(page0.pageText, file.filePath)
+                }
+            }
+            return
+        }
+
+        // Standard size file: direct loading
+        _isLargeFileMode.value = false
+        _largeFileLineIndex.value = null
+        _currentLargeFilePage.value = null
         _activeFile.value = file
         _activeFileContent.value = file.content
         _saveStatus.value = "Saved"
@@ -319,10 +374,68 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         runDiagnostics(file.content, file.filePath)
     }
 
+    fun loadLargeFilePage(targetPageIndex: Int) {
+        val index = _largeFileLineIndex.value ?: return
+        val currentFile = _activeFile.value ?: return
+        val totalPages = index.pageOffsets.size.coerceAtLeast(1)
+        val safeIndex = targetPageIndex.coerceIn(0, totalPages - 1)
+
+        _isLargeFileLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val page = com.example.util.LargeFileEngine.readPage(index, safeIndex)
+            withContext(Dispatchers.Main) {
+                _currentLargeFilePage.value = page
+                _activeFileContent.value = page.pageText
+                _isLargeFileLoading.value = false
+                _saveStatus.value = "Page ${page.pageIndex + 1} of ${page.totalPages} loaded"
+                runDiagnostics(page.pageText, currentFile.filePath)
+            }
+        }
+    }
+
+    fun saveActiveLargeFilePage(pageText: String) {
+        val index = _largeFileLineIndex.value ?: return
+        val currentPage = _currentLargeFilePage.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val updatedIndex = com.example.util.LargeFileEngine.savePage(index, currentPage.pageIndex, pageText)
+            val updatedPage = com.example.util.LargeFileEngine.readPage(updatedIndex, currentPage.pageIndex)
+            withContext(Dispatchers.Main) {
+                _largeFileLineIndex.value = updatedIndex
+                _currentLargeFilePage.value = updatedPage
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                _saveStatus.value = "Saved page ${updatedPage.pageIndex + 1} of ${updatedPage.totalPages} at $timeStr"
+            }
+        }
+    }
+
+    fun jumpToLargeFileLine(targetLine: Int) {
+        val index = _largeFileLineIndex.value ?: return
+        val safeLine = targetLine.coerceIn(1, index.totalLines)
+        val targetPageIndex = (safeLine - 1) / index.pageSize
+        loadLargeFilePage(targetPageIndex)
+    }
+
+    fun setLargeFilePageSize(newPageSize: Int) {
+        val index = _largeFileLineIndex.value ?: return
+        val file = index.file
+        _largeFilePageSize.value = newPageSize
+        _isLargeFileLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val newIndex = com.example.util.LargeFileEngine.buildPageIndex(file, newPageSize)
+            val page0 = com.example.util.LargeFileEngine.readPage(newIndex, 0)
+            withContext(Dispatchers.Main) {
+                _largeFileLineIndex.value = newIndex
+                _currentLargeFilePage.value = page0
+                _activeFileContent.value = page0.pageText
+                _isLargeFileLoading.value = false
+            }
+        }
+    }
+
     fun updateActiveFileContent(newContent: String) {
         _activeFileContent.value = newContent
         val currentFile = _activeFile.value
-        if (currentFile != null) {
+        if (currentFile != null && !_isLargeFileMode.value) {
             val updatedFile = currentFile.copy(content = newContent)
             _activeFile.value = updatedFile
             val currentFiles = _projectFiles.value.map { if (it.id == updatedFile.id) updatedFile else it }
@@ -334,9 +447,9 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         diagnosticsJob?.cancel()
         diagnosticsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             delay(400)
-            val currentFile = _activeFile.value
-            if (currentFile != null) {
-                val diags = com.example.ui.editor.CodeLinter.lintCode(newContent, currentFile.filePath)
+            val file = _activeFile.value
+            if (file != null) {
+                val diags = com.example.ui.editor.CodeLinter.lintCode(newContent, file.filePath)
                 _codeDiagnostics.value = diags
             }
         }
@@ -397,6 +510,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveActiveFile() {
         val file = _activeFile.value ?: return
         val currentContent = _activeFileContent.value
+
+        if (_isLargeFileMode.value) {
+            saveActiveLargeFilePage(currentContent)
+            return
+        }
+
         val updatedFile = file.copy(content = currentContent)
         _activeFile.value = updatedFile
 
@@ -413,6 +532,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         val project = _currentProject.value
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             repository.saveFile(updatedFile)
+            val localFile = com.example.util.LargeFileEngine.getLocalFile(getApplication(), file.projectId, file.filePath)
+            com.example.util.LargeFileEngine.writeEntireContent(localFile, currentContent)
             if (project != null) {
                 com.example.engine.BotFileAutoCreator.autoCreateReferencedFiles(project, currentFiles, repository)
             }
@@ -560,17 +681,26 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 } catch (_: Exception) {}
 
-                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalArgumentException("Could not read file")
-
-                val cleanContent = String(bytes, java.nio.charset.StandardCharsets.UTF_8)
-                    .removePrefix("\uFEFF")
-                    .replace("\r\n", "\n")
-                    .replace("\r", "\n")
-
                 val cleanPath = fileName.trimStart('/')
-                val autoFixed = com.example.util.BotCodeAutoFixer.autoFixFile(cleanContent, cleanPath, proj)
-                val finalContent = autoFixed.fixedCode
+                val localFile = com.example.util.LargeFileEngine.getLocalFile(context, proj.id, cleanPath)
+
+                // Stream directly from ContentResolver into local disk file using 32KB buffer (0 heap exhaustion)
+                contentResolver.openInputStream(uri)?.use { inStream ->
+                    com.example.util.LargeFileEngine.streamToFile(inStream, localFile)
+                } ?: throw IllegalArgumentException("Could not open file stream")
+
+                val fileSize = localFile.length()
+                val isLarge = fileSize > com.example.util.LargeFileEngine.LARGE_FILE_THRESHOLD_BYTES
+
+                val finalContent = if (isLarge) {
+                    "[DISK_STORED_FILE:${localFile.name}:SIZE=$fileSize]"
+                } else {
+                    val text = localFile.bufferedReader(java.nio.charset.StandardCharsets.UTF_8).use { it.readText() }
+                        .removePrefix("\uFEFF")
+                        .replace("\r\n", "\n")
+                    val autoFixed = com.example.util.BotCodeAutoFixer.autoFixFile(text, cleanPath, proj)
+                    autoFixed.fixedCode
+                }
 
                 val newFileId = repository.createFile(proj.id, cleanPath, finalContent)
                 val createdFile = repository.getFileById(newFileId)
@@ -579,8 +709,9 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     if (createdFile != null) {
                         selectFile(createdFile)
                     }
-                    val fixSuffix = if (autoFixed.fixesApplied.isNotEmpty()) " (${autoFixed.fixesApplied.size} auto-corrections applied)" else ""
-                    onResult?.invoke(true, "Imported '$cleanPath'$fixSuffix successfully!")
+                    val sizeKb = fileSize / 1024
+                    val modeNote = if (isLarge) " (⚡ Large File Mode: ${sizeKb} KB streamed)" else ""
+                    onResult?.invoke(true, "Imported '$cleanPath'$modeNote successfully!")
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -659,6 +790,101 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun getDefaultExportTreeUri(context: Context): Uri? {
+        val prefs = context.getSharedPreferences("bot_studio_settings", Context.MODE_PRIVATE)
+        val uriStr = prefs.getString("default_export_folder_uri", null) ?: return null
+        return try {
+            val uri = Uri.parse(uriStr)
+            val hasPerm = context.contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isWritePermission
+            }
+            if (hasPerm) {
+                uri
+            } else {
+                val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                if (doc != null && doc.canWrite()) uri else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun getExportFolderDisplayName(context: Context, treeUri: Uri): String {
+        return try {
+            val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+            doc?.name ?: "Selected Folder"
+        } catch (_: Exception) {
+            "Selected Folder"
+        }
+    }
+
+    fun setDefaultExportTreeUri(context: Context, treeUri: Uri) {
+        try {
+            val takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+        } catch (_: Exception) {}
+        context.getSharedPreferences("bot_studio_settings", Context.MODE_PRIVATE)
+            .edit()
+            .putString("default_export_folder_uri", treeUri.toString())
+            .apply()
+    }
+
+    fun clearDefaultExportTreeUri(context: Context) {
+        context.getSharedPreferences("bot_studio_settings", Context.MODE_PRIVATE)
+            .edit()
+            .remove("default_export_folder_uri")
+            .apply()
+    }
+
+    fun exportProjectToTree(
+        project: BotProject,
+        treeUri: Uri,
+        context: Context,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val treeDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                    ?: throw IllegalArgumentException("Cannot access selected folder. Please choose a folder again.")
+
+                val safeName = project.name.replace(Regex("[^a-zA-Z0-9._-]"), "_").trim('_').ifEmpty { "bot" }
+                val fileName = "${safeName}.zip"
+
+                // Delete old export with same name if it exists so we overwrite cleanly
+                val existing = treeDir.findFile(fileName)
+                existing?.delete()
+
+                val newZipDoc = treeDir.createFile("application/zip", fileName)
+                    ?: throw IllegalArgumentException("Could not create '${fileName}' in '${treeDir.name}'")
+
+                val outputStream = context.contentResolver.openOutputStream(newZipDoc.uri)
+                    ?: throw IllegalArgumentException("Could not open destination stream")
+
+                val files = if (_currentProject.value?.id == project.id && _projectFiles.value.isNotEmpty()) {
+                    _projectFiles.value
+                } else {
+                    repository.getFilesDirect(project.id)
+                }
+
+                val summary = com.example.util.BotZipManager.exportToZipStream(outputStream, project, files, context)
+                val folderName = treeDir.name ?: "folder"
+                val message = if (summary.success) {
+                    "✅ Exported '${fileName}' to '$folderName'!"
+                } else {
+                    summary.message
+                }
+
+                withContext(Dispatchers.Main) {
+                    onResult(summary.success, message)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Export failed: ${e.localizedMessage ?: "Unknown error"}")
+                }
+            }
+        }
+    }
+
     fun exportProjectToZip(
         project: BotProject,
         destinationUri: Uri,
@@ -671,7 +897,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                 val outputStream = context.contentResolver.openOutputStream(destinationUri)
                     ?: throw IllegalArgumentException("Could not open destination file for writing")
 
-                val summary = com.example.util.BotZipManager.exportToZipStream(outputStream, project, files)
+                val summary = com.example.util.BotZipManager.exportToZipStream(outputStream, project, files, context)
                 withContext(Dispatchers.Main) {
                     onResult(summary.success, summary.message)
                 }

@@ -6,9 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -132,6 +134,22 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // Launcher for selecting destination folder in system files and auto-exporting ZIP
+    val folderTreeExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        val project = projectToExport
+        if (treeUri != null && project != null) {
+            viewModel.setDefaultExportTreeUri(context, treeUri)
+            val folderName = viewModel.getExportFolderDisplayName(context, treeUri)
+            Toast.makeText(context, "📁 Export folder set to '$folderName'. Exporting ZIP...", Toast.LENGTH_SHORT).show()
+            viewModel.exportProjectToTree(project, treeUri, context) { _, message ->
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }
+        }
+        projectToExport = null
     }
 
     // Launcher for creating destination ZIP file for export
@@ -579,6 +597,23 @@ fun HomeScreen(
                             viewModel.setTab(AppTab.BOT_CONFIG)
                         },
                         onExportClick = {
+                            val savedTree = viewModel.getDefaultExportTreeUri(context)
+                            if (savedTree == null) {
+                                // First time click: take user to system files and ask where to set expected files,
+                                // and after they do it, auto-exports them in ZIP!
+                                projectToExport = project
+                                Toast.makeText(context, "Select destination folder for bot export files", Toast.LENGTH_SHORT).show()
+                                folderTreeExportLauncher.launch(null)
+                            } else {
+                                // Destination folder already chosen: auto-export immediately to that folder!
+                                val folderName = viewModel.getExportFolderDisplayName(context, savedTree)
+                                Toast.makeText(context, "⚡ Auto-exporting '${project.name}.zip' to $folderName...", Toast.LENGTH_SHORT).show()
+                                viewModel.exportProjectToTree(project, savedTree, context) { _, message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        onExportLongClick = {
                             showExportOptionsDialog = project
                         },
                         onDeleteClick = {
@@ -625,6 +660,9 @@ fun HomeScreen(
 
     // Enhanced Dialog for Exporting Bot Project
     showExportOptionsDialog?.let { targetProject ->
+        val savedFolderUri = viewModel.getDefaultExportTreeUri(context)
+        val folderDisplayName = if (savedFolderUri != null) viewModel.getExportFolderDisplayName(context, savedFolderUri) else "None Selected"
+
         AlertDialog(
             onDismissRequest = { showExportOptionsDialog = null },
             containerColor = DiscordSurface,
@@ -654,6 +692,27 @@ fun HomeScreen(
                     )
 
                     Surface(
+                        color = DiscordDarker,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("📁 Destination: ", color = DiscordTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = folderDisplayName,
+                                color = if (savedFolderUri != null) DiscordGreen else DiscordYellow,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Surface(
                         color = DiscordElevated,
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -669,8 +728,53 @@ fun HomeScreen(
                                 fontSize = 12.sp
                             )
 
-                            // Option A: Save as Production ZIP
+                            // Option A: Auto-Export to selected system folder
                             Button(
+                                onClick = {
+                                    val proj = targetProject
+                                    showExportOptionsDialog = null
+                                    if (savedFolderUri != null) {
+                                        viewModel.exportProjectToTree(proj, savedFolderUri, context) { _, msg ->
+                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        }
+                                    } else {
+                                        projectToExport = proj
+                                        folderTreeExportLauncher.launch(null)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("btn_confirm_auto_export_zip")
+                            ) {
+                                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (savedFolderUri != null) "Auto-Export ZIP to $folderDisplayName" else "Set Folder in System Files & Export",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            // Option B: Change Destination Folder in System Files
+                            OutlinedButton(
+                                onClick = {
+                                    val proj = targetProject
+                                    showExportOptionsDialog = null
+                                    projectToExport = proj
+                                    folderTreeExportLauncher.launch(null)
+                                },
+                                border = BorderStroke(1.dp, DiscordBlurple.copy(alpha = 0.6f)),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("btn_change_export_folder")
+                            ) {
+                                Icon(Icons.Default.Build, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Change Export Folder in System Files", color = DiscordTextPrimary, fontSize = 12.sp)
+                            }
+
+                            // Option C: Save As Single File (File Picker)
+                            OutlinedButton(
                                 onClick = {
                                     val proj = targetProject
                                     showExportOptionsDialog = null
@@ -678,32 +782,32 @@ fun HomeScreen(
                                     val safeName = proj.name.replace(Regex("[^a-zA-Z0-9._-]"), "_").trim('_').ifEmpty { "bot" }
                                     zipExportLauncher.launch("${safeName}.zip")
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                border = BorderStroke(1.dp, DiscordHover),
                                 shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().testTag("btn_save_as_file")
                             ) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Code, contentDescription = null, tint = DiscordTextSecondary, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Save Production ZIP Archive", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Save As Single File (File Picker)", color = DiscordTextSecondary, fontSize = 12.sp)
                             }
 
-                            // Option B: Share ZIP via Android Share Sheet
+                            // Option D: Share ZIP via Android Share Sheet
                             OutlinedButton(
                                 onClick = {
                                     val proj = targetProject
                                     showExportOptionsDialog = null
                                     viewModel.shareProjectZip(proj, context) { _, _ -> }
                                 },
-                                border = BorderStroke(1.dp, DiscordBlurple),
+                                border = BorderStroke(1.dp, DiscordHover),
                                 shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().testTag("btn_share_export_zip")
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Share, contentDescription = null, tint = DiscordTextSecondary, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Share ZIP (Discord / Drive / Email)", color = DiscordTextPrimary, fontSize = 12.sp)
+                                Text("Share ZIP (Discord / Drive / Email)", color = DiscordTextSecondary, fontSize = 12.sp)
                             }
 
-                            // Option C: Copy All Code to Clipboard
+                            // Option E: Copy All Code to Clipboard
                             OutlinedButton(
                                 onClick = {
                                     val proj = targetProject
@@ -922,6 +1026,7 @@ fun HomeScreen(
  * Individual Bot Card inside the "My Bots" section.
  * Clicking anywhere on the card or clicking "Open Editor" selects the bot and opens the code editor.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeBotCard(
     project: BotProject,
@@ -933,6 +1038,7 @@ fun HomeBotCard(
     onConfigureClick: () -> Unit,
     onExportClick: () -> Unit,
     onDeleteClick: () -> Unit,
+    onExportLongClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val (langBadge, langColor) = when (project.language.uppercase()) {
@@ -1142,20 +1248,30 @@ fun HomeBotCard(
                         )
                     }
 
-                    // Export Bot to ZIP Button
-                    IconButton(
-                        onClick = onExportClick,
+                    // Export Bot to ZIP Button (Tap to auto-export / pick folder, hold for options)
+                    Surface(
+                        color = DiscordElevated,
+                        shape = RoundedCornerShape(6.dp),
                         modifier = Modifier
                             .size(34.dp)
-                            .background(DiscordElevated, RoundedCornerShape(6.dp))
                             .testTag("btn_export_bot_${project.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CloudUpload,
-                            contentDescription = "Export ZIP",
-                            tint = DiscordBlurple,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .combinedClickable(
+                                    onClick = onExportClick,
+                                    onLongClick = onExportLongClick
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudUpload,
+                                contentDescription = "Export ZIP",
+                                tint = DiscordBlurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
 
                     // Delete Bot Button
