@@ -585,8 +585,12 @@ fun HomeScreen(
                                 Toast.makeText(context, "Bot '${project.name}' stopped", Toast.LENGTH_SHORT).show()
                             } else {
                                 viewModel.selectProject(project)
-                                viewModel.startBotProcess()
-                                Toast.makeText(context, "Bot '${project.name}' running in background 24/7", Toast.LENGTH_SHORT).show()
+                                if (!viewModel.runtimeEngine.isRealToken(project.botToken)) {
+                                    viewModel.showTokenInputDialog.value = true
+                                } else {
+                                    viewModel.startBotProcess()
+                                    Toast.makeText(context, "🟢 Connecting '${project.name}' live to Discord...", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         },
                         onConfigureClick = {

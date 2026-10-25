@@ -862,12 +862,18 @@ fun CodeEditorScreen(viewModel: BotStudioViewModel) {
                 onClick = {
                     if (isRunning) {
                         viewModel.stopBotProcess()
+                        Toast.makeText(context, "Bot stopped", Toast.LENGTH_SHORT).show()
                     } else {
                         textSyncJob?.cancel()
                         viewModel.updateActiveFileContent(textFieldValue.text)
                         viewModel.saveActiveFile()
-                        viewModel.startBotProcess()
-                        Toast.makeText(context, "🟢 Bot running with your editor code!", Toast.LENGTH_SHORT).show()
+                        val token = project?.botToken ?: ""
+                        if (!viewModel.runtimeEngine.isRealToken(token)) {
+                            viewModel.showTokenInputDialog.value = true
+                        } else {
+                            viewModel.startBotProcess()
+                            Toast.makeText(context, "🟢 Connecting live to Discord...", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 },
                 colors = ButtonDefaults.buttonColors(

@@ -236,6 +236,133 @@ object PackageManager {
             iconName = "check_circle",
             commands = listOf("npm test", "pytest"),
             importSnippet = "// Test runner active"
+        ),
+
+        // Discord Bot Libraries (Android-Compatible)
+        InstallablePackage(
+            id = "sdk_nyxx",
+            name = "nyxx & nyxx_interactions",
+            version = "6.1.1",
+            sizeMb = 1.6,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Dart & Flutter native Discord API wrapper with slash command interactions.",
+            iconName = "code",
+            commands = listOf("flutter pub add nyxx nyxx_interactions"),
+            importSnippet = "import 'package:nyxx/nyxx.dart';\nimport 'package:nyxx_interactions/nyxx_interactions.dart';"
+        ),
+        InstallablePackage(
+            id = "sdk_jda",
+            name = "JDA (Java Discord API)",
+            version = "5.0.0-beta.20",
+            sizeMb = 4.8,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Java & Kotlin Discord API client with event listeners and command managers.",
+            iconName = "code",
+            commands = listOf("implementation 'net.dv8tion:JDA:5.0.0-beta.20'"),
+            importSnippet = "import net.dv8tion.jda.api.JDABuilder;\nimport net.dv8tion.jda.api.entities.Activity;"
+        ),
+        InstallablePackage(
+            id = "sdk_discord4j",
+            name = "Discord4J",
+            version = "3.2.6",
+            sizeMb = 5.1,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Reactive, non-blocking Java and Kotlin library for the Discord Bot API.",
+            iconName = "code",
+            commands = listOf("implementation 'com.discord4j:discord4j-core:3.2.6'"),
+            importSnippet = "import discord4j.core.DiscordClient;\nimport discord4j.core.GatewayDiscordClient;"
+        ),
+        InstallablePackage(
+            id = "scaffold_dna_bot",
+            name = "create-dna-discord-bot",
+            version = "1.4.0",
+            sizeMb = 1.2,
+            category = PackageCategory.DISCORD_SDK,
+            description = "Project scaffolding CLI for creating production-ready Discord bots with handlers.",
+            iconName = "build",
+            commands = listOf("npx create-dna-discord-bot"),
+            importSnippet = "// Scaffolding tool"
+        ),
+        InstallablePackage(
+            id = "scaffold_bot_builder",
+            name = "@dookdiks/discord-bot-builder",
+            version = "2.1.0",
+            sizeMb = 1.5,
+            category = PackageCategory.DISCORD_SDK,
+            description = "High-level Discord bot builder framework with decorators and event dispatchers.",
+            iconName = "build",
+            commands = listOf("npm i @dookdiks/discord-bot-builder"),
+            importSnippet = "const { BotBuilder } = require('@dookdiks/discord-bot-builder');"
+        ),
+
+        // Code Editor Libraries
+        InstallablePackage(
+            id = "editor_codeview",
+            name = "CodeView (Android Native)",
+            version = "1.0.0",
+            sizeMb = 0.9,
+            category = PackageCategory.EXTENSION,
+            description = "Native Android Kotlin/Java code editor view with syntax highlighting and line numbers.",
+            iconName = "code",
+            commands = listOf("implementation 'com.amrdeveloper.codeview:codeview:1.0.0'"),
+            importSnippet = "// Native Android CodeView"
+        ),
+        InstallablePackage(
+            id = "editor_rn_codepad",
+            name = "react-native-codepad",
+            version = "1.2.0",
+            sizeMb = 2.2,
+            category = PackageCategory.EXTENSION,
+            description = "Native Tree-sitter powered code editor for React Native (no WebView lag).",
+            iconName = "code",
+            commands = listOf("npm install react-native-codepad react-native-nitro-modules react-native-codepad-lang-javascript"),
+            importSnippet = "import { CodePad } from 'react-native-codepad';"
+        ),
+        InstallablePackage(
+            id = "editor_flutter_zuraffa",
+            name = "zuraffa_code_editor & highlight",
+            version = "0.8.2",
+            sizeMb = 1.4,
+            category = PackageCategory.EXTENSION,
+            description = "High-performance Flutter mobile code editor with syntax highlighting.",
+            iconName = "code",
+            commands = listOf("flutter pub add zuraffa_code_editor highlight"),
+            importSnippet = "import 'package:zuraffa_code_editor/zuraffa_code_editor.dart';"
+        ),
+        InstallablePackage(
+            id = "editor_codemirror_rn",
+            name = "@actualwave/react-native-codeditor",
+            version = "0.9.1",
+            sizeMb = 1.8,
+            category = PackageCategory.EXTENSION,
+            description = "CodeMirror 6 mobile-optimized editor integration for React Native.",
+            iconName = "code",
+            commands = listOf("npm install @actualwave/react-native-codeditor @actualwave/codemirror-package"),
+            importSnippet = "import CodeEditor from '@actualwave/react-native-codeditor';"
+        ),
+        InstallablePackage(
+            id = "editor_flutter_monaco",
+            name = "flutter_monaco",
+            version = "0.4.0",
+            sizeMb = 3.8,
+            category = PackageCategory.EXTENSION,
+            description = "Flutter Monaco Editor integration for multi-language syntax support.",
+            iconName = "code",
+            commands = listOf("flutter pub add flutter_monaco"),
+            importSnippet = "import 'package:flutter_monaco/flutter_monaco.dart';"
+        ),
+
+        // Termux Environment Setup
+        InstallablePackage(
+            id = "env_termux_runtime",
+            name = "Termux Runtime (nodejs, python, ffmpeg)",
+            version = "2026.04",
+            sizeMb = 18.5,
+            category = PackageCategory.LANGUAGE,
+            description = "On-device Termux package bundle to execute Node.js, Python, and FFmpeg on Android.",
+            iconName = "terminal",
+            commands = listOf("pkg install nodejs python ffmpeg -y"),
+            importSnippet = "# Termux environment ready"
         )
     )
 

@@ -381,15 +381,18 @@ fun TerminalScreen(viewModel: BotStudioViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     val quickCmds = listOf(
+                        "npm i discord.js dotenv",
+                        "pkg install nodejs python ffmpeg -y",
+                        "pip install discord.py",
+                        "flutter pub add nyxx nyxx_interactions",
+                        "implementation 'com.amrdeveloper.codeview:codeview:1.0.0'",
+                        "npx create-dna-discord-bot",
+                        "npm i @discordjs/voice",
                         "node index.js",
                         "status",
                         "ping",
-                        "npm test",
-                        "npm install",
                         "ls -la",
                         "cat index.js",
-                        "python bot.py",
-                        "env",
                         "help",
                         "clear"
                     )

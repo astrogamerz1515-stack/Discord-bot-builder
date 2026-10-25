@@ -413,5 +413,38 @@ class BotExecutionTest {
         assertTrue(body.contains("Finished test!"))
         assertTrue(body.contains("deep: true"))
     }
+
+    @Test
+    fun testPackageManagerDiscordCatalogContainsAllRequestedPackages() {
+        val allPkgs = com.example.packages.PackageManager.allPackages.value
+
+        // Verify Discord bot packages
+        assertTrue("discord.js should be present", allPkgs.any { it.name.contains("discord.js", ignoreCase = true) })
+        assertTrue("@discordjs/voice should be present", allPkgs.any { it.name.contains("@discordjs/voice", ignoreCase = true) })
+        assertTrue("dotenv should be present", allPkgs.any { it.name.contains("dotenv", ignoreCase = true) })
+        assertTrue("discord.py should be present", allPkgs.any { it.name.contains("discord.py", ignoreCase = true) })
+        assertTrue("nyxx should be present", allPkgs.any { it.name.contains("nyxx", ignoreCase = true) })
+        assertTrue("JDA should be present", allPkgs.any { it.name.contains("JDA", ignoreCase = true) })
+        assertTrue("Discord4J should be present", allPkgs.any { it.name.contains("Discord4J", ignoreCase = true) })
+        assertTrue("create-dna-discord-bot should be present", allPkgs.any { it.name.contains("create-dna-discord-bot", ignoreCase = true) })
+        assertTrue("@dookdiks/discord-bot-builder should be present", allPkgs.any { it.name.contains("discord-bot-builder", ignoreCase = true) })
+
+        // Verify Code Editor packages
+        assertTrue("CodeView should be present", allPkgs.any { it.id == "editor_codeview" })
+        assertTrue("react-native-codepad should be present", allPkgs.any { it.id == "editor_rn_codepad" })
+        assertTrue("zuraffa_code_editor should be present", allPkgs.any { it.id == "editor_flutter_zuraffa" })
+        assertTrue("@actualwave/react-native-codeditor should be present", allPkgs.any { it.id == "editor_codemirror_rn" })
+        assertTrue("flutter_monaco should be present", allPkgs.any { it.id == "editor_flutter_monaco" })
+
+        // Verify Termux environment package
+        assertTrue("Termux runtime bundle should be present", allPkgs.any { it.id == "env_termux_runtime" })
+    }
+
+    @Test
+    fun testInstallCustomPackageAndStatus() = runBlocking {
+        val customPkg = com.example.packages.PackageManager.installCustomPackage("discord-player", "npm")
+        assertNotNull(customPkg)
+        assertTrue(com.example.packages.PackageManager.isInstalled(customPkg.id))
+    }
 }
 

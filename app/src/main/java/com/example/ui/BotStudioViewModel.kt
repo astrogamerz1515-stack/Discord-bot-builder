@@ -155,6 +155,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     val showProjectSwitchDialog = MutableStateFlow(false)
     val showSnippetsDialog = MutableStateFlow(false)
     val showGeneratedCodeDialog = MutableStateFlow(false)
+    val showTokenInputDialog = MutableStateFlow(false)
+    val connectionError: StateFlow<String?> = runtimeEngine.connectionError
+
+    fun dismissConnectionError() {
+        runtimeEngine.clearConnectionError()
+    }
     val generatedCodeText = MutableStateFlow("")
 
     // Editor display configuration states
@@ -1080,10 +1086,29 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun updateProjectTokenAndStart(token: String) {
+        val project = _currentProject.value ?: return
+        val sanitized = runtimeEngine.sanitizeToken(token)
+        viewModelScope.launch {
+            val updated = project.copy(botToken = sanitized)
+            _currentProject.value = updated
+            repository.updateProject(updated)
+            showTokenInputDialog.value = false
+            startBotProcess()
+        }
+    }
+
     fun startBotProcess() {
         val project = _currentProject.value ?: return
         saveActiveFile()
         val cleanToken = runtimeEngine.sanitizeToken(project.botToken)
+
+        // Check if token is present and valid
+        if (!runtimeEngine.isRealToken(cleanToken)) {
+            showTokenInputDialog.value = true
+            return
+        }
+
         val cleanProject = if (cleanToken != project.botToken) project.copy(botToken = cleanToken) else project
         val currentFiles = _projectFiles.value
         runtimeEngine.updateCachedFiles(cleanProject.id, currentFiles)

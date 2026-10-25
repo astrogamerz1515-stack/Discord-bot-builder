@@ -42,6 +42,15 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Storage
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -120,6 +129,8 @@ fun MainScreen(viewModel: BotStudioViewModel) {
     val generatedCodeText by viewModel.generatedCodeText.collectAsState()
     val editorFullscreenMode by viewModel.editorFullscreenMode.collectAsState()
     val showBottomNavInEditor by viewModel.showBottomNavInEditor.collectAsState()
+    val showTokenInputDialog by viewModel.showTokenInputDialog.collectAsState()
+    val connectionError by viewModel.connectionError.collectAsState()
 
     if (currentTab != AppTab.HOME) {
         BackHandler {
@@ -846,6 +857,212 @@ bottomBar = {
             dismissButton = {
                 TextButton(onClick = { viewModel.showGeneratedCodeDialog.value = false }) {
                     Text("Close", color = DiscordTextSecondary)
+                }
+            }
+        )
+    }
+
+    // Dialog: Enter Bot Token to Deploy Live
+    if (showTokenInputDialog) {
+        var tokenInput by remember(project) { mutableStateOf(project?.botToken ?: "") }
+        var showTokenText by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.showTokenInputDialog.value = false },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Key,
+                        contentDescription = null,
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Deploy Live to Discord",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "To deploy your bot live on Discord and keep it online 24/7, enter your Discord Bot Token.",
+                        color = DiscordTextSecondary,
+                        fontSize = 13.sp
+                    )
+
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("Discord Bot Token") },
+                        placeholder = { Text("Paste bot token here...") },
+                        visualTransformation = if (showTokenText) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                                        if (clip.isNotBlank()) {
+                                            tokenInput = clip.trim()
+                                            Toast.makeText(context, "Pasted from clipboard", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = DiscordTextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { showTokenText = !showTokenText }) {
+                                    Icon(
+                                        imageVector = if (showTokenText) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = "Toggle token visibility",
+                                        tint = DiscordTextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DiscordTextPrimary,
+                            unfocusedTextColor = DiscordTextPrimary,
+                            focusedBorderColor = DiscordBlurple
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Critical Privileged Intent Warning / Reminder
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DiscordDarker),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = DiscordYellow, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Required Discord Setting:", color = DiscordYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                text = "In the Discord Developer Portal -> Bot -> Privileged Gateway Intents, turn ON 'Message Content Intent' so the bot can receive commands.",
+                                color = DiscordTextMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    // Button to open Discord Developer Portal
+                    Button(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.com/developers/applications"))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open Discord Developer Portal", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val sanitized = tokenInput.trim()
+                        if (sanitized.isNotBlank()) {
+                            viewModel.updateProjectTokenAndStart(sanitized)
+                        } else {
+                            Toast.makeText(context, "Please paste your Discord Bot Token", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text("Deploy & Connect Bot", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.showTokenInputDialog.value = false }) {
+                    Text("Cancel", color = DiscordTextSecondary)
+                }
+            }
+        )
+    }
+
+    // Dialog: Connection Error Alert (e.g. 4004 or 4014)
+    if (connectionError != null) {
+        val err = connectionError ?: ""
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissConnectionError() },
+            containerColor = DiscordSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = DiscordRed,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Discord Connection Error",
+                        color = DiscordTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = err,
+                        color = DiscordTextPrimary,
+                        fontSize = 13.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.com/developers/applications"))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {}
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordHover),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open Developer Portal", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissConnectionError()
+                        viewModel.showTokenInputDialog.value = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text("Update Bot Token", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissConnectionError() }) {
+                    Text("Dismiss", color = DiscordTextSecondary)
                 }
             }
         )

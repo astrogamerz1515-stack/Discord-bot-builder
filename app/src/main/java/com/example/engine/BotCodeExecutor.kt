@@ -1186,7 +1186,13 @@ object BotCodeExecutor {
             replyText = if (logMatches.isNotEmpty()) {
                 "⚡ ${logMatches.first()}"
             } else {
-                "✨ Command `${project.prefix}$commandName` executed successfully."
+                ""
+            }
+            if (replyText.isBlank() && !hasEmbed) {
+                return BotExecutionResult(
+                    isHandled = false,
+                    executionLog = execLog
+                )
             }
         }
 
@@ -1482,16 +1488,8 @@ object BotCodeExecutor {
                             matchedRule = "Blank bot notification"
                         )
                     } else {
-                        // User typed a command and has code in their files:
-                        // Positively acknowledge execution of the command
-                        val cmdHint = if (customCommands.isNotEmpty()) {
-                            "\n*(Available commands detected in code: ${customCommands.joinToString(", ") { "`${project.prefix}$it`" }})*"
-                        } else ""
-                        BotExecutionResult(
-                            replyText = "⚡ Executed `${project.prefix}$commandName` from your bot.$cmdHint",
-                            isHandled = true,
-                            matchedRule = "Dynamic command handler"
-                        )
+                        // User typed a command but no handler matched in code - do not output fake executed message
+                        BotExecutionResult(isHandled = false)
                     }
                 } else {
                     BotExecutionResult(isHandled = false)

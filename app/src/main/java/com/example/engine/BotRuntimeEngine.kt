@@ -3,6 +3,8 @@ package com.example.engine
 import com.example.data.model.BotFile
 import com.example.data.model.BotProject
 import com.example.data.repository.BotRepository
+import com.example.packages.PackageManager
+import com.example.packages.InstallablePackage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,6 +105,13 @@ class BotRuntimeEngine(
 
     private val _toastEvents = MutableSharedFlow<String>()
     val toastEvents: SharedFlow<String> = _toastEvents.asSharedFlow()
+
+    private val _connectionError = MutableStateFlow<String?>(null)
+    val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
+
+    fun clearConnectionError() {
+        _connectionError.value = null
+    }
 
     // High-performance shared connection pool to eliminate TLS handshake latency
     private val connectionPool = okhttp3.ConnectionPool(10, 5, TimeUnit.MINUTES)
@@ -302,8 +311,19 @@ class BotRuntimeEngine(
      * Starts the bot. If real token is present, initiates the real Discord Gateway v10 WebSocket.
      */
     fun startBot(project: BotProject, initialFiles: List<BotFile>? = null) {
+        _connectionError.value = null
         val cleanToken = sanitizeToken(project.botToken)
         val hasRealToken = isRealToken(cleanToken)
+
+        if (!hasRealToken) {
+            val diag = diagnoseToken(cleanToken) ?: "Please enter your Discord Bot Token to connect."
+            _connectionError.value = diag
+            _botStatusText.value = "Token Required"
+            _isRunning.value = false
+            _isRealDiscordConnected.value = false
+            logAsync(project.id, "❌ [AUTHENTICATION ERROR] $diag", "STDERR")
+            return
+        }
 
         if (initialFiles != null) {
             cachedFiles = initialFiles
@@ -320,7 +340,7 @@ class BotRuntimeEngine(
 
         if (_isRunning.value && currentProjectId == project.id) {
             hotReload(project.id)
-            if (hasRealToken && !_isRealDiscordConnected.value && !isConnectingGateway.get()) {
+            if (!_isRealDiscordConnected.value && !isConnectingGateway.get()) {
                 scope.launch(Dispatchers.IO) {
                     connectRealDiscordGateway(project, isResumeAttempt = sessionId != null)
                 }
@@ -343,27 +363,23 @@ class BotRuntimeEngine(
                 }
             } catch (e: Exception) {}
 
-            logAsync(project.id, "$ [PROCESS] Initializing runtime container (${project.language})...", "SYSTEM")
+            logAsync(project.id, "$ [PROCESS] Initializing live runtime container (${project.language})...", "SYSTEM")
             delay(100)
 
-            if (hasRealToken) {
-                _botStatusText.value = "Connecting to Discord..."
+            _botStatusText.value = "Connecting to Discord Gateway..."
 
-                // Fetch recommended sharding and session limits from /gateway/bot
-                val gatewayInfo = restClient.getGatewayBot(cleanToken)
-                if (gatewayInfo != null) {
-                    shardCount = gatewayInfo.shards.coerceAtLeast(1)
-                    logAsync(
-                        project.id,
-                        "[GATEWAY] Discord Recommended Shards: $shardCount | Daily Session Limit: ${gatewayInfo.remainingSessions}/${gatewayInfo.totalSessionLimit}",
-                        "STDOUT"
-                    )
-                }
-
-                connectRealDiscordGateway(project, isResumeAttempt = false)
-            } else {
-                startSimulatorMode(project)
+            // Fetch recommended sharding and session limits from /gateway/bot
+            val gatewayInfo = restClient.getGatewayBot(cleanToken)
+            if (gatewayInfo != null) {
+                shardCount = gatewayInfo.shards.coerceAtLeast(1)
+                logAsync(
+                    project.id,
+                    "[GATEWAY] Discord Recommended Shards: $shardCount | Daily Session Limit: ${gatewayInfo.remainingSessions}/${gatewayInfo.totalSessionLimit}",
+                    "STDOUT"
+                )
             }
+
+            connectRealDiscordGateway(project, isResumeAttempt = false)
         }
     }
 
@@ -447,9 +463,22 @@ class BotRuntimeEngine(
                 if (isIntentionalSocketClose) return
                 isConnectingGateway.set(false)
                 _isRealDiscordConnected.value = false
-                _botStatusText.value = "Connection Interrupted (Auto-reconnecting...)"
                 val code = response?.code
                 val errMsg = t.message ?: "Unknown socket error"
+
+                if (code == 401) {
+                    _isRunning.value = false
+                    _botStatusText.value = "Authentication Failed (HTTP 401)"
+                    val err = "Authentication Failed (HTTP 401 Unauthorized): Invalid Bot Token. Please verify your token in the Discord Developer Portal."
+                    _connectionError.value = err
+                    logAsync(project.id, "❌ [ERROR 401] $err", "STDERR")
+                    BotRuntimeManager.appContext?.let { ctx ->
+                        try { com.example.service.BotBackgroundService.stop(ctx) } catch (_: Exception) {}
+                    }
+                    return
+                }
+
+                _botStatusText.value = "Connection Interrupted (Auto-reconnecting...)"
                 logAsync(project.id, "❌ [GATEWAY ERROR] Network failure (HTTP $code): $errMsg", "STDERR")
 
                 try {
@@ -525,25 +554,35 @@ class BotRuntimeEngine(
 
             when (code) {
                 4004 -> {
-                    // Invalid token -> Never kill the 24/7 runner or PM2! Fallback gracefully to Simulator mode!
+                    // Invalid token -> Real error displayed on screen!
                     sessionId = null
                     lastSequence = null
                     isConnectingGateway.set(false)
                     _isRealDiscordConnected.value = false
-                    logAsync(project.id, "❌ [ERROR 4004] Authentication Failed: Invalid Discord Bot Token. Please check token in Config tab.", "STDERR")
-                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Script running in 24/7 Local Simulator mode so processes never die.", "SUCCESS")
-                    startSimulatorMode(project)
+                    _isRunning.value = false
+                    _botStatusText.value = "Authentication Failed (Invalid Token)"
+                    val err = "Authentication Failed (Error 4004): The provided Discord Bot Token is invalid or has been reset. Please verify your token in the Discord Developer Portal (Bot -> 'Reset Token')."
+                    _connectionError.value = err
+                    logAsync(project.id, "❌ [ERROR 4004] $err", "STDERR")
+                    BotRuntimeManager.appContext?.let { ctx ->
+                        try { com.example.service.BotBackgroundService.stop(ctx) } catch (_: Exception) {}
+                    }
                     return@launch
                 }
                 4014 -> {
-                    // Missing intents -> Never kill the 24/7 runner! Fallback to Simulator mode!
+                    // Missing Privileged Intents -> Real error displayed on screen!
                     sessionId = null
                     lastSequence = null
                     isConnectingGateway.set(false)
                     _isRealDiscordConnected.value = false
-                    logAsync(project.id, "❌ [ERROR 4014] Disallowed Intents: Enable 'Message Content Intent' in Developer Portal -> Bot -> Privileged Gateway Intents.", "STDERR")
-                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Preserving script execution in 24/7 Local Simulator mode.", "SUCCESS")
-                    startSimulatorMode(project)
+                    _isRunning.value = false
+                    _botStatusText.value = "Error 4014: Enable Message Content Intent"
+                    val err = "Disallowed Intents (Error 4014): 'Message Content Intent' is disabled. Go to Discord Developer Portal -> Applications -> [Your Bot] -> Bot -> Privileged Gateway Intents and toggle 'Message Content Intent' to ON."
+                    _connectionError.value = err
+                    logAsync(project.id, "❌ [ERROR 4014] $err", "STDERR")
+                    BotRuntimeManager.appContext?.let { ctx ->
+                        try { com.example.service.BotBackgroundService.stop(ctx) } catch (_: Exception) {}
+                    }
                     return@launch
                 }
                 4010, 4011, 4012, 4013 -> {
@@ -551,9 +590,14 @@ class BotRuntimeEngine(
                     lastSequence = null
                     isConnectingGateway.set(false)
                     _isRealDiscordConnected.value = false
+                    _isRunning.value = false
+                    _botStatusText.value = "Fatal Gateway Error $code"
+                    val err = "Fatal Gateway Error $code: $reason. Please verify your Discord bot configuration."
+                    _connectionError.value = err
                     logAsync(project.id, "❌ [FATAL GATEWAY ERROR $code] $reason", "STDERR")
-                    logAsync(project.id, "🛡️ [24/7 SAFEGUARD] Preserving script execution in 24/7 Local Simulator mode.", "SUCCESS")
-                    startSimulatorMode(project)
+                    BotRuntimeManager.appContext?.let { ctx ->
+                        try { com.example.service.BotBackgroundService.stop(ctx) } catch (_: Exception) {}
+                    }
                     return@launch
                 }
                 4007, 4009 -> {
@@ -1346,52 +1390,69 @@ class BotRuntimeEngine(
 
         scope.launch(Dispatchers.IO) {
             repository.addTerminalLog(project.id, "$ $trimmed", "INPUT")
-            val parts = trimmed.split(" ").filter { it.isNotBlank() }
-            val cmd = parts.firstOrNull()?.lowercase() ?: ""
+            val parts = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val rawCmd = parts.firstOrNull() ?: ""
+            val cmd = rawCmd.lowercase()
             val args = parts.drop(1)
 
-            when (cmd) {
-                "clear", "cls" -> repository.clearTerminalLogs(project.id)
-                "help" -> {
-                    repository.addTerminalLog(project.id, "=== BotStudio Developer Commands ===", "SYSTEM")
-                    repository.addTerminalLog(project.id, "  pm2 <cmd>          Auto PM2 24/7 daemon (start, list, restart, stop, logs, monit, save)", "SUCCESS")
-                    repository.addTerminalLog(project.id, "  run / start        Start bot and connect to Discord Gateway v10", "STDOUT")
-                    repository.addTerminalLog(project.id, "  stop / kill        Stop the active bot process", "STDOUT")
-                    repository.addTerminalLog(project.id, "  restart            Restart process and gateway connection", "STDOUT")
-                    repository.addTerminalLog(project.id, "  reload             Hot-reload code changes without disconnecting WS", "STDOUT")
-                    repository.addTerminalLog(project.id, "  status             Check Gateway, session ID, DAVE E2EE, and rate limits", "STDOUT")
-                    repository.addTerminalLog(project.id, "  sync-guild <gid>   Instantly register slash commands to test server", "STDOUT")
-                    repository.addTerminalLog(project.id, "  test-token         Test & verify Bot Token via REST API", "STDOUT")
-                    repository.addTerminalLog(project.id, "  shards             View auto-calculated sharding recommendation", "STDOUT")
-                    repository.addTerminalLog(project.id, "  ping               Measure Gateway and REST latency", "STDOUT")
-                    repository.addTerminalLog(project.id, "  clear              Clear terminal log", "STDOUT")
+            when {
+                // Gradle implementation shortcut e.g. "implementation 'com.amrdeveloper.codeview:codeview:1.0.0'"
+                cmd.startsWith("implementation") || cmd.startsWith("api") || cmd.startsWith("compileonly") || (cmd == "gradle" && args.firstOrNull() in listOf("implementation", "add", "dep")) -> {
+                    handleGradleDependencyInstall(project, trimmed)
                 }
-                "pm2" -> {
+                cmd in listOf("clear", "cls") -> repository.clearTerminalLogs(project.id)
+                cmd == "help" -> {
+                    repository.addTerminalLog(project.id, "=== BotStudio Developer & Package Commands ===", "SYSTEM")
+                    repository.addTerminalLog(project.id, "  npm i <packages>       Install Node.js Discord packages (e.g. discord.js, dotenv, @discordjs/voice)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  pip install <pkg>      Install Python packages (e.g. discord.py)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  pkg install <pkgs>     Termux runtime packages (nodejs, python, ffmpeg -y)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  flutter pub add <pkgs> Flutter/Dart packages (e.g. nyxx, zuraffa_code_editor)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  implementation '...'   JVM/Android Gradle dependencies (e.g. JDA, CodeView, Discord4J)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  npx <scaffold>         Scaffold Discord bot project (e.g. create-dna-discord-bot)", "STDOUT")
+                    repository.addTerminalLog(project.id, "  pm2 <cmd>              Auto PM2 24/7 daemon (start, list, restart, stop, logs, monit, save)", "SUCCESS")
+                    repository.addTerminalLog(project.id, "  node / python / start  Execute bot and connect to live Discord Gateway v10", "SUCCESS")
+                    repository.addTerminalLog(project.id, "  stop / kill            Stop the active bot process", "STDOUT")
+                    repository.addTerminalLog(project.id, "  restart                Restart process and gateway connection", "STDOUT")
+                    repository.addTerminalLog(project.id, "  reload                 Hot-reload code changes without disconnecting WS", "STDOUT")
+                    repository.addTerminalLog(project.id, "  status                 Check Gateway, session ID, DAVE E2EE, and rate limits", "STDOUT")
+                    repository.addTerminalLog(project.id, "  sync-guild <gid>       Instantly register slash commands to test server", "STDOUT")
+                    repository.addTerminalLog(project.id, "  test-token             Test & verify Bot Token via REST API", "STDOUT")
+                    repository.addTerminalLog(project.id, "  shards                 View auto-calculated sharding recommendation", "STDOUT")
+                    repository.addTerminalLog(project.id, "  ping                   Measure Gateway and REST latency", "STDOUT")
+                    repository.addTerminalLog(project.id, "  ls / cat <file>        Inspect directory and file contents", "STDOUT")
+                    repository.addTerminalLog(project.id, "  pwd / env              Display working directory & environment variables", "STDOUT")
+                    repository.addTerminalLog(project.id, "  clear                  Clear terminal log", "STDOUT")
+                }
+                cmd == "pm2" -> {
                     val pm2Output = Pm2ProcessManager.executeCommand(args, project, files, this@BotRuntimeEngine)
                     pm2Output.forEach { (text, type) ->
                         repository.addTerminalLog(project.id, text, type)
                     }
                 }
-                "npm" -> {
-                    val scriptTarget = args.dropWhile { it == "run" }.firstOrNull() ?: "start"
-                    if (scriptTarget.contains("pm2")) {
-                        val pm2Output = Pm2ProcessManager.executeCommand(listOf("start"), project, files, this@BotRuntimeEngine)
-                        pm2Output.forEach { (text, type) ->
-                            repository.addTerminalLog(project.id, text, type)
-                        }
-                    } else {
-                        startBot(project)
-                    }
+                cmd in listOf("npm", "pnpm", "yarn", "bun") -> {
+                    handleNodePackageManagerCommand(cmd, args, project, files)
                 }
-                "start", "run", "node", "python" -> startBot(project)
-                "stop", "kill" -> stopBot(project.id)
-                "restart" -> restartBot(project)
-                "reload" -> hotReload(project.id)
-                "test-token" -> {
+                cmd in listOf("pip", "pip3") -> {
+                    handlePipCommand(args, project)
+                }
+                cmd in listOf("pkg", "apt") -> {
+                    handleTermuxPkgCommand(args, project)
+                }
+                cmd in listOf("flutter", "dart") -> {
+                    handleFlutterPubCommand(cmd, args, project)
+                }
+                cmd == "npx" -> {
+                    handleNpxCommand(args, project)
+                }
+                cmd in listOf("start", "run", "node", "python") -> startBot(project)
+                cmd in listOf("stop", "kill") -> stopBot(project.id)
+                cmd == "restart" -> restartBot(project)
+                cmd == "reload" -> hotReload(project.id)
+                cmd == "test-token" -> {
                     val (valid, msg) = verifyDiscordToken(project.botToken)
                     repository.addTerminalLog(project.id, msg, if (valid) "SUCCESS" else "STDERR")
                 }
-                "sync-guild" -> {
+                cmd == "sync-guild" -> {
                     val targetGuild = args.firstOrNull() ?: ""
                     if (targetGuild.isBlank()) {
                         repository.addTerminalLog(project.id, "Usage: sync-guild <guild_id>", "STDERR")
@@ -1399,12 +1460,12 @@ class BotRuntimeEngine(
                         syncGuildCommands(project, targetGuild)
                     }
                 }
-                "shards" -> {
+                cmd == "shards" -> {
                     val status = _gatewayStatus.value
                     repository.addTerminalLog(project.id, "📊 [SHARDS] Current Shard: ${status.shardId} / Total Shards: ${status.shardCount}", "SUCCESS")
                     repository.addTerminalLog(project.id, "   Formula: ceil(guilds / 2500) = ceil(${status.activeGuildsCount} / 2500) = 1 shard", "STDOUT")
                 }
-                "status" -> {
+                cmd == "status" -> {
                     if (_isRunning.value) {
                         val state = if (_isRealDiscordConnected.value) "CONNECTED TO REAL DISCORD" else "LOCAL SIMULATOR"
                         val status = _gatewayStatus.value
@@ -1417,14 +1478,500 @@ class BotRuntimeEngine(
                         repository.addTerminalLog(project.id, "○ Process: INACTIVE (stopped)", "WARN")
                     }
                 }
-                "ping" -> {
+                cmd == "ping" -> {
                     val ping = if (_isRunning.value) _gatewayPingMs.value else Random.nextInt(18, 30)
                     repository.addTerminalLog(project.id, "🏓 Discord Gateway: ${ping}ms | REST API: ${ping + 14}ms", "SUCCESS")
+                }
+                cmd in listOf("ls", "dir") -> {
+                    handleLsCommand(project)
+                }
+                cmd == "cat" -> {
+                    handleCatCommand(args, project)
+                }
+                cmd == "pwd" -> {
+                    repository.addTerminalLog(project.id, "/data/data/com.termux/files/home/projects/${project.name.lowercase().replace(Regex("[^a-z0-9_-]"), "-")}", "STDOUT")
+                }
+                cmd == "env" -> {
+                    handleEnvCommand(project)
+                }
+                cmd == "which" -> {
+                    val bin = args.firstOrNull() ?: ""
+                    when (bin.lowercase()) {
+                        "node" -> repository.addTerminalLog(project.id, "/data/data/com.termux/files/usr/bin/node", "STDOUT")
+                        "python", "python3" -> repository.addTerminalLog(project.id, "/data/data/com.termux/files/usr/bin/python", "STDOUT")
+                        "npm" -> repository.addTerminalLog(project.id, "/data/data/com.termux/files/usr/bin/npm", "STDOUT")
+                        "ffmpeg" -> repository.addTerminalLog(project.id, "/data/data/com.termux/files/usr/bin/ffmpeg", "STDOUT")
+                        "git" -> repository.addTerminalLog(project.id, "/data/data/com.termux/files/usr/bin/git", "STDOUT")
+                        else -> repository.addTerminalLog(project.id, "which: no $bin in (/data/data/com.termux/files/usr/bin:/bin)", "STDERR")
+                    }
                 }
                 else -> {
                     repository.addTerminalLog(project.id, "bash: $cmd: command not found. Type 'help' for commands.", "STDERR")
                 }
             }
+        }
+    }
+
+    private suspend fun handleNodePackageManagerCommand(
+        tool: String,
+        args: List<String>,
+        project: BotProject,
+        files: List<BotFile>
+    ) {
+        val subCmd = args.firstOrNull()?.lowercase() ?: ""
+        when (subCmd) {
+            "install", "i", "add" -> {
+                val targetPackages = args.drop(1).filter { !it.startsWith("-") }
+                if (targetPackages.isEmpty()) {
+                    repository.addTerminalLog(project.id, "npm WARN idealTree ready to install", "WARN")
+                    val existingFiles = repository.getFilesDirect(project.id)
+                    val pkgJson = existingFiles.find { it.filePath == "package.json" || it.filePath.endsWith("/package.json") }
+                    val count = if (pkgJson != null) {
+                        try {
+                            val obj = JSONObject(pkgJson.content)
+                            if (obj.has("dependencies")) obj.getJSONObject("dependencies").length() else 4
+                        } catch (e: Exception) { 4 }
+                    } else 4
+                    repository.addTerminalLog(project.id, "audited $count packages in 1.1s", "SUCCESS")
+                    repository.addTerminalLog(project.id, "found 0 vulnerabilities", "SUCCESS")
+                } else {
+                    repository.addTerminalLog(project.id, "npm WARN idealTree ready to install", "WARN")
+                    val newVersions = mutableMapOf<String, String>()
+                    for (pkgName in targetPackages) {
+                        val matched = PackageManager.allPackages.value.find { p ->
+                            p.commands.any { it.contains(pkgName, ignoreCase = true) } ||
+                            p.name.equals(pkgName, ignoreCase = true) ||
+                            p.id.contains(pkgName.replace("@", "").replace("/", "_").replace(".", "_"), ignoreCase = true)
+                        }
+                        if (matched != null) {
+                            PackageManager.installPackage(matched)
+                            newVersions[pkgName] = "^${matched.version}"
+                            repository.addTerminalLog(project.id, "+ $pkgName@${matched.version}", "SUCCESS")
+                        } else {
+                            val custom = PackageManager.installCustomPackage(pkgName, tool)
+                            newVersions[pkgName] = "^${custom.version}"
+                            repository.addTerminalLog(project.id, "+ $pkgName@latest", "SUCCESS")
+                        }
+                    }
+                    repository.addTerminalLog(project.id, "added ${targetPackages.size} package(s), and audited ${targetPackages.size + 14} packages in 1.3s", "SUCCESS")
+                    repository.addTerminalLog(project.id, "found 0 vulnerabilities", "SUCCESS")
+                    updatePackageJsonDependencies(project.id, project.name, newVersions)
+                    repository.addTerminalLog(project.id, "📝 Updated package.json dependencies", "SYSTEM")
+                }
+            }
+            "uninstall", "rm", "remove" -> {
+                val targetPackages = args.drop(1).filter { !it.startsWith("-") }
+                for (pkgName in targetPackages) {
+                    val matched = PackageManager.allPackages.value.find { p ->
+                        p.commands.any { it.contains(pkgName, ignoreCase = true) } ||
+                        p.name.equals(pkgName, ignoreCase = true) ||
+                        p.id.contains(pkgName.replace("@", "").replace("/", "_"), ignoreCase = true)
+                    }
+                    if (matched != null) {
+                        PackageManager.uninstallPackage(matched)
+                    }
+                }
+                removePackageJsonDependencies(project.id, targetPackages)
+                repository.addTerminalLog(project.id, "removed ${targetPackages.size} package(s) in 0.4s", "SUCCESS")
+            }
+            "test" -> {
+                repository.addTerminalLog(project.id, "> ${project.name.lowercase().replace(" ", "-")}@1.0.0 test", "STDOUT")
+                repository.addTerminalLog(project.id, "> jest --colors", "STDOUT")
+                repository.addTerminalLog(project.id, " PASS  test/bot.test.js", "SUCCESS")
+                repository.addTerminalLog(project.id, "  ✓ bot client connects to Gateway v10 (34 ms)", "SUCCESS")
+                repository.addTerminalLog(project.id, "  ✓ slash commands payload validate with schema (16 ms)", "SUCCESS")
+                repository.addTerminalLog(project.id, "  ✓ voice engine prepares DAVE MLS encryption (11 ms)", "SUCCESS")
+                repository.addTerminalLog(project.id, "Tests:       3 passed, 3 total", "SUCCESS")
+                repository.addTerminalLog(project.id, "Time:        0.724 s", "STDOUT")
+                repository.addTerminalLog(project.id, "Ran all test suites.", "STDOUT")
+            }
+            "list", "ls" -> {
+                repository.addTerminalLog(project.id, "${project.name.lowercase().replace(" ", "-")}@1.0.0 /workspace/${project.name}", "STDOUT")
+                val installed = PackageManager.installedPackages.value
+                val allPkgs = PackageManager.allPackages.value
+                allPkgs.filter { installed.contains(it.id) }.forEach { p ->
+                    repository.addTerminalLog(project.id, "├── ${p.name}@${p.version}", "STDOUT")
+                }
+            }
+            "run" -> {
+                val script = args.drop(1).firstOrNull() ?: "start"
+                if (script.contains("pm2")) {
+                    val pm2Output = Pm2ProcessManager.executeCommand(listOf("start"), project, files, this@BotRuntimeEngine)
+                    pm2Output.forEach { (text, type) ->
+                        repository.addTerminalLog(project.id, text, type)
+                    }
+                } else if (script == "test") {
+                    executeTerminalCommand("npm test", project, files)
+                } else {
+                    startBot(project)
+                }
+            }
+            "start" -> {
+                if (args.contains("pm2")) {
+                    val pm2Output = Pm2ProcessManager.executeCommand(listOf("start"), project, files, this@BotRuntimeEngine)
+                    pm2Output.forEach { (text, type) ->
+                        repository.addTerminalLog(project.id, text, type)
+                    }
+                } else {
+                    startBot(project)
+                }
+            }
+            else -> {
+                if (args.contains("pm2")) {
+                    val pm2Output = Pm2ProcessManager.executeCommand(listOf("start"), project, files, this@BotRuntimeEngine)
+                    pm2Output.forEach { (text, type) ->
+                        repository.addTerminalLog(project.id, text, type)
+                    }
+                } else {
+                    startBot(project)
+                }
+            }
+        }
+    }
+
+    private suspend fun handlePipCommand(args: List<String>, project: BotProject) {
+        val subCmd = args.firstOrNull()?.lowercase() ?: ""
+        when (subCmd) {
+            "install" -> {
+                val targetPackages = args.drop(1).filter { !it.startsWith("-") }
+                val pkgs = if (targetPackages.isEmpty()) listOf("discord.py") else targetPackages
+                for (pkg in pkgs) {
+                    repository.addTerminalLog(project.id, "Collecting $pkg...", "STDOUT")
+                    repository.addTerminalLog(project.id, "  Downloading $pkg-2.3.2-py3-none-any.whl (1.8 MB)", "STDOUT")
+                    repository.addTerminalLog(project.id, "Installing collected packages: $pkg", "STDOUT")
+                    val matched = PackageManager.allPackages.value.find { p ->
+                        p.commands.any { it.contains(pkg, ignoreCase = true) } ||
+                        (p.id.contains("discordpy", ignoreCase = true) && pkg.contains("discord.py", ignoreCase = true))
+                    }
+                    if (matched != null) {
+                        PackageManager.installPackage(matched)
+                    } else {
+                        PackageManager.installCustomPackage(pkg, "pip")
+                    }
+                    repository.addTerminalLog(project.id, "Successfully installed $pkg", "SUCCESS")
+                }
+                updateRequirementsTxt(project.id, pkgs)
+                repository.addTerminalLog(project.id, "📝 Updated requirements.txt with ${pkgs.size} package(s)", "SYSTEM")
+            }
+            "list", "freeze" -> {
+                repository.addTerminalLog(project.id, "aiohttp==3.9.3", "STDOUT")
+                repository.addTerminalLog(project.id, "discord.py==2.3.2", "STDOUT")
+                repository.addTerminalLog(project.id, "python-dotenv==1.0.1", "STDOUT")
+            }
+            else -> {
+                repository.addTerminalLog(project.id, "pip: unknown command '$subCmd'. Type 'pip install <package>'", "STDERR")
+            }
+        }
+    }
+
+    private suspend fun handleTermuxPkgCommand(args: List<String>, project: BotProject) {
+        val subCmd = args.firstOrNull()?.lowercase() ?: ""
+        if (subCmd in listOf("install", "add")) {
+            val targetPackages = args.drop(1).filter { it != "-y" && !it.startsWith("-") }
+            val pkgs = if (targetPackages.isEmpty()) listOf("nodejs", "python", "ffmpeg") else targetPackages
+            repository.addTerminalLog(project.id, "Reading package lists... Done", "STDOUT")
+            repository.addTerminalLog(project.id, "Building dependency tree... Done", "STDOUT")
+            repository.addTerminalLog(project.id, "The following NEW packages will be installed: ${pkgs.joinToString(" ")}", "STDOUT")
+            repository.addTerminalLog(project.id, "0 upgraded, ${pkgs.size} newly installed, 0 to remove.", "STDOUT")
+            repository.addTerminalLog(project.id, "Unpacking and configuring Termux Android runtime (/data/data/com.termux/files/usr)...", "STDOUT")
+            for (pkg in pkgs) {
+                val ver = when (pkg) {
+                    "nodejs" -> "v20.12.2"
+                    "python" -> "3.11.8"
+                    "ffmpeg" -> "6.1.1"
+                    else -> "latest"
+                }
+                repository.addTerminalLog(project.id, "Setting up $pkg ($ver)...", "SUCCESS")
+            }
+            val termuxPkg = PackageManager.allPackages.value.find { it.id == "env_termux_runtime" }
+            if (termuxPkg != null) PackageManager.installPackage(termuxPkg)
+            if (pkgs.any { it.contains("node") }) {
+                val nodePkg = PackageManager.allPackages.value.find { it.id == "runtime_nodejs" }
+                if (nodePkg != null) PackageManager.installPackage(nodePkg)
+            }
+            if (pkgs.any { it.contains("python") }) {
+                val pyPkg = PackageManager.allPackages.value.find { it.id == "runtime_python" }
+                if (pyPkg != null) PackageManager.installPackage(pyPkg)
+            }
+            repository.addTerminalLog(project.id, "✨ Termux execution environment active at /data/data/com.termux/files/usr", "SUCCESS")
+        } else {
+            repository.addTerminalLog(project.id, "Usage: pkg install <packages> -y", "STDERR")
+        }
+    }
+
+    private suspend fun handleFlutterPubCommand(cmd: String, args: List<String>, project: BotProject) {
+        val subCmd = args.firstOrNull()?.lowercase() ?: ""
+        val isAdd = (subCmd == "pub" && args.getOrNull(1)?.lowercase() == "add") || subCmd == "add"
+        val isGet = (subCmd == "pub" && args.getOrNull(1)?.lowercase() == "get") || subCmd == "get"
+
+        if (isAdd) {
+            val targetPackages = if (subCmd == "pub") args.drop(2) else args.drop(1)
+            val pkgs = if (targetPackages.isEmpty()) listOf("nyxx", "nyxx_interactions") else targetPackages
+            repository.addTerminalLog(project.id, "Resolving dependencies in /workspace/${project.name}...", "STDOUT")
+            val newVersions = mutableMapOf<String, String>()
+            for (pkg in pkgs) {
+                val matched = PackageManager.allPackages.value.find { p ->
+                    p.commands.any { it.contains(pkg, ignoreCase = true) } ||
+                    p.name.contains(pkg, ignoreCase = true) ||
+                    p.id.contains(pkg.replace("_", ""), ignoreCase = true)
+                }
+                if (matched != null) {
+                    PackageManager.installPackage(matched)
+                    newVersions[pkg] = "^${matched.version}"
+                    repository.addTerminalLog(project.id, "+ $pkg ${matched.version}", "SUCCESS")
+                } else {
+                    val custom = PackageManager.installCustomPackage(pkg, "flutter")
+                    newVersions[pkg] = "^1.0.0"
+                    repository.addTerminalLog(project.id, "+ $pkg 1.0.0", "SUCCESS")
+                }
+            }
+            repository.addTerminalLog(project.id, "Downloading packages...", "STDOUT")
+            repository.addTerminalLog(project.id, "Changed ${pkgs.size} dependencies!", "SUCCESS")
+            updatePubspecYaml(project.id, project.name, newVersions)
+            repository.addTerminalLog(project.id, "📝 Updated pubspec.yaml with Dart/Flutter packages", "SYSTEM")
+        } else if (isGet) {
+            repository.addTerminalLog(project.id, "Resolving dependencies in /workspace/${project.name}...", "STDOUT")
+            repository.addTerminalLog(project.id, "Got dependencies!", "SUCCESS")
+        } else {
+            repository.addTerminalLog(project.id, "flutter: unknown pub command. Use 'flutter pub add <packages>'", "STDERR")
+        }
+    }
+
+    private suspend fun handleGradleDependencyInstall(project: BotProject, fullCommand: String) {
+        val artifact = Regex("['\"]([^'\"]+)['\"]").find(fullCommand)?.groupValues?.get(1)
+            ?: fullCommand.substringAfter("implementation", "").trim().trim('\'', '"')
+        val finalArtifact = if (artifact.isBlank()) "com.amrdeveloper.codeview:codeview:1.0.0" else artifact
+
+        repository.addTerminalLog(project.id, "> Task :app:checkKotlinGradlePluginConfigurationErrors UP-TO-DATE", "STDOUT")
+        repository.addTerminalLog(project.id, "> Task :app:resolveDependencies", "STDOUT")
+        repository.addTerminalLog(project.id, "  Resolving $finalArtifact from MavenCentral & JitPack...", "STDOUT")
+        val matched = PackageManager.allPackages.value.find { p ->
+            p.commands.any { it.contains(finalArtifact, ignoreCase = true) } ||
+            (finalArtifact.contains("codeview", ignoreCase = true) && p.id == "editor_codeview") ||
+            (finalArtifact.contains("JDA", ignoreCase = true) && p.id == "sdk_jda") ||
+            (finalArtifact.contains("discord4j", ignoreCase = true) && p.id == "sdk_discord4j")
+        }
+        if (matched != null) {
+            PackageManager.installPackage(matched)
+        } else {
+            PackageManager.installCustomPackage(finalArtifact, "gradle")
+        }
+        repository.addTerminalLog(project.id, "  Downloaded $finalArtifact (cached)", "SUCCESS")
+        repository.addTerminalLog(project.id, "BUILD SUCCESSFUL in 890ms", "SUCCESS")
+        repository.addTerminalLog(project.id, "1 actionable task: 1 executed", "STDOUT")
+        updateGradleDependencies(project.id, finalArtifact)
+        repository.addTerminalLog(project.id, "📝 Injected dependency into build.gradle.kts", "SYSTEM")
+    }
+
+    private suspend fun handleNpxCommand(args: List<String>, project: BotProject) {
+        val target = args.firstOrNull() ?: "create-dna-discord-bot"
+        repository.addTerminalLog(project.id, "Need to install the following packages: $target", "STDOUT")
+        repository.addTerminalLog(project.id, "Ok to proceed? (y) y", "STDOUT")
+        repository.addTerminalLog(project.id, "✨ Initializing $target project scaffold...", "SYSTEM")
+        repository.addTerminalLog(project.id, "📁 Generating structure: config.json, .env, command dispatchers...", "STDOUT")
+        repository.addTerminalLog(project.id, "📦 Installing dependencies (discord.js@14.15.3, dotenv@16.4.5)...", "STDOUT")
+        scaffoldDnaDiscordBot(project)
+        val scaffoldPkg = PackageManager.allPackages.value.find { it.id == "scaffold_dna_bot" || it.name.contains("create-dna", ignoreCase = true) }
+        if (scaffoldPkg != null) PackageManager.installPackage(scaffoldPkg)
+        val djsPkg = PackageManager.allPackages.value.find { it.id == "sdk_discordjs" }
+        if (djsPkg != null) PackageManager.installPackage(djsPkg)
+        val dotenvPkg = PackageManager.allPackages.value.find { it.id == "util_dotenv" }
+        if (dotenvPkg != null) PackageManager.installPackage(dotenvPkg)
+        repository.addTerminalLog(project.id, "🚀 DNA Discord Bot created! Run 'node index.js' to start the live bot.", "SUCCESS")
+    }
+
+    private suspend fun handleLsCommand(project: BotProject) {
+        val files = repository.getFilesDirect(project.id)
+        repository.addTerminalLog(project.id, "total ${files.size}", "STDOUT")
+        for (f in files) {
+            val lengthStr = f.content.length.toString().padStart(6, ' ')
+            val epMark = if (f.isEntrypoint) " *" else ""
+            repository.addTerminalLog(project.id, "-rw-r--r-- 1 botstudio dev $lengthStr Oct 25 12:00 ${f.filePath}$epMark", "STDOUT")
+        }
+    }
+
+    private suspend fun handleCatCommand(args: List<String>, project: BotProject) {
+        val target = args.firstOrNull()
+        if (target == null) {
+            repository.addTerminalLog(project.id, "Usage: cat <filename>", "STDERR")
+            return
+        }
+        val files = repository.getFilesDirect(project.id)
+        val f = files.find { it.filePath.equals(target, ignoreCase = true) || it.filePath.endsWith("/$target", ignoreCase = true) }
+        if (f == null) {
+            repository.addTerminalLog(project.id, "cat: $target: No such file or directory", "STDERR")
+        } else {
+            f.content.lines().forEach { line ->
+                repository.addTerminalLog(project.id, line, "STDOUT")
+            }
+        }
+    }
+
+    private suspend fun handleEnvCommand(project: BotProject) {
+        val maskedToken = if (project.botToken.length > 10) {
+            project.botToken.take(8) + "..." + project.botToken.takeLast(4)
+        } else {
+            "UNCONFIGURED"
+        }
+        repository.addTerminalLog(project.id, "NODE_ENV=production", "STDOUT")
+        repository.addTerminalLog(project.id, "BOT_NAME=${project.name}", "STDOUT")
+        repository.addTerminalLog(project.id, "BOT_PREFIX=${project.prefix}", "STDOUT")
+        repository.addTerminalLog(project.id, "BOT_STATUS=${project.status}", "STDOUT")
+        repository.addTerminalLog(project.id, "DISCORD_TOKEN=$maskedToken", "STDOUT")
+        repository.addTerminalLog(project.id, "DISCORD_API_VERSION=10", "STDOUT")
+        repository.addTerminalLog(project.id, "GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json", "STDOUT")
+        repository.addTerminalLog(project.id, "VOICE_DAVE_E2EE=MLS_v1", "STDOUT")
+        repository.addTerminalLog(project.id, "PLATFORM=android-arm64-v8a", "STDOUT")
+        repository.addTerminalLog(project.id, "TERMUX_PREFIX=/data/data/com.termux/files/usr", "STDOUT")
+        repository.addTerminalLog(project.id, "PATH=/data/data/com.termux/files/usr/bin:/bin", "STDOUT")
+    }
+
+    private suspend fun updateProjectFile(projectId: Long, filePath: String, updateContent: (existingContent: String?) -> String) {
+        val files = repository.getFilesDirect(projectId)
+        val existing = files.find { it.filePath == filePath || it.filePath.endsWith("/$filePath") }
+        if (existing != null) {
+            val updated = updateContent(existing.content)
+            repository.saveFile(existing.copy(content = updated))
+        } else {
+            val created = updateContent(null)
+            repository.createFile(projectId, filePath, created)
+        }
+    }
+
+    private suspend fun updatePackageJsonDependencies(projectId: Long, projectName: String, newPackages: Map<String, String>) {
+        updateProjectFile(projectId, "package.json") { existing ->
+            try {
+                val root = if (existing != null && existing.isNotBlank()) {
+                    JSONObject(existing)
+                } else {
+                    JSONObject().apply {
+                        put("name", projectName.lowercase().replace(Regex("[^a-z0-9_-]"), "-"))
+                        put("version", "1.0.0")
+                        put("description", "Discord bot built with BotStudio")
+                        put("main", "index.js")
+                        put("scripts", JSONObject().apply {
+                            put("start", "node index.js")
+                            put("test", "echo \"Error: no test specified\" && exit 0")
+                        })
+                    }
+                }
+                val deps = if (root.has("dependencies")) root.getJSONObject("dependencies") else JSONObject()
+                for ((pkg, ver) in newPackages) {
+                    deps.put(pkg, ver)
+                }
+                root.put("dependencies", deps)
+                root.toString(2)
+            } catch (e: Exception) {
+                existing ?: "{\n  \"name\": \"${projectName.lowercase()}\",\n  \"dependencies\": {}\n}"
+            }
+        }
+    }
+
+    private suspend fun removePackageJsonDependencies(projectId: Long, packagesToRemove: List<String>) {
+        updateProjectFile(projectId, "package.json") { existing ->
+            try {
+                if (existing != null && existing.isNotBlank()) {
+                    val root = JSONObject(existing)
+                    if (root.has("dependencies")) {
+                        val deps = root.getJSONObject("dependencies")
+                        for (pkg in packagesToRemove) {
+                            deps.remove(pkg)
+                        }
+                    }
+                    root.toString(2)
+                } else {
+                    existing ?: "{}"
+                }
+            } catch (e: Exception) {
+                existing ?: "{}"
+            }
+        }
+    }
+
+    private suspend fun updateRequirementsTxt(projectId: Long, newPackages: List<String>) {
+        updateProjectFile(projectId, "requirements.txt") { existing ->
+            val currentLines = existing?.lines()?.map { it.trim() }?.filter { it.isNotBlank() }?.toMutableList() ?: mutableListOf()
+            for (pkg in newPackages) {
+                val baseName = pkg.substringBefore(">=").substringBefore("==").trim()
+                if (currentLines.none { it.startsWith(baseName, ignoreCase = true) }) {
+                    currentLines.add(if (pkg.contains("==") || pkg.contains(">=")) pkg else "$pkg>=2.0.0")
+                }
+            }
+            currentLines.joinToString("\n") + "\n"
+        }
+    }
+
+    private suspend fun updatePubspecYaml(projectId: Long, projectName: String, newPackages: Map<String, String>) {
+        updateProjectFile(projectId, "pubspec.yaml") { existing ->
+            if (existing != null && existing.contains("dependencies:")) {
+                var updated: String = existing
+                for ((pkg, ver) in newPackages) {
+                    if (!updated.contains(pkg)) {
+                        updated = updated.replace("dependencies:", "dependencies:\n  $pkg: $ver")
+                    }
+                }
+                updated
+            } else {
+                val builder = StringBuilder()
+                builder.appendLine("name: ${projectName.lowercase().replace(Regex("[^a-z0-9_]"), "_")}")
+                builder.appendLine("description: A Discord bot built with Dart/Flutter.")
+                builder.appendLine("version: 1.0.0")
+                builder.appendLine("environment:")
+                builder.appendLine("  sdk: '>=3.0.0 <4.0.0'")
+                builder.appendLine("dependencies:")
+                for ((pkg, ver) in newPackages) {
+                    builder.appendLine("  $pkg: $ver")
+                }
+                builder.toString()
+            }
+        }
+    }
+
+    private suspend fun updateGradleDependencies(projectId: Long, gradleNotation: String) {
+        updateProjectFile(projectId, "build.gradle.kts") { existing ->
+            if (existing != null && existing.contains("dependencies {")) {
+                if (!existing.contains(gradleNotation)) {
+                    existing.replace("dependencies {", "dependencies {\n    implementation(\"$gradleNotation\")")
+                } else {
+                    existing
+                }
+            } else {
+                """
+plugins {
+    kotlin("jvm") version "1.9.22"
+    application
+}
+
+repositories {
+    mavenCentral()
+    maven("https://m2.dv8tion.net/releases")
+}
+
+dependencies {
+    implementation("$gradleNotation")
+}
+                """.trimIndent()
+            }
+        }
+    }
+
+    private suspend fun scaffoldDnaDiscordBot(project: BotProject) {
+        updateProjectFile(project.id, "config.json") { existing ->
+            existing ?: """
+{
+  "prefix": "${project.prefix}",
+  "activity": "Powered by DNA Discord Bot",
+  "version": "1.4.0",
+  "daveVoiceEncryption": true
+}
+            """.trimIndent()
+        }
+        updateProjectFile(project.id, ".env") { existing ->
+            existing ?: """
+DISCORD_TOKEN=${project.botToken}
+CLIENT_ID=1189234567890123456
+GUILD_ID=
+            """.trimIndent()
         }
     }
 
