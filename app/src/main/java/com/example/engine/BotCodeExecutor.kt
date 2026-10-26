@@ -974,25 +974,27 @@ object BotCodeExecutor {
     ): BotExecutionResult {
         // A. Direct string replies: reply('...'), send('...'), say('...'), ChannelMessageSend('...')
         val stringReplyPattern = Regex(
-            """(?:await\s+)?(?:message|msg|channel|interaction|ctx|s|event(?:\.getChannel\(\))?)(?:\.channel)?\.(?:reply|send|editReply|followUp|say|ChannelMessageSend|sendMessage|SendMessageAsync)\(\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|(?:\{[\s\S]*?content\s*:\s*(['"`])([\s\S]*?)\5))""",
+            """(?:await\s+)?(?:message|msg|channel|interaction|ctx|s|event(?:\.getChannel\(\))?)(?:\.channel)?\.(?:reply|send|editReply|followUp|say|ChannelMessageSend|sendMessage|SendMessageAsync)\(\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|(?:\{[\s\S]*?content\s*:\s*(['"`])([\s\S]*?)\5))(?:\s*\.format\s*\(([\s\S]*?)\))?""",
             RegexOption.IGNORE_CASE
         )
         val strMatch = stringReplyPattern.find(body)
         var replyText = strMatch?.let {
             val raw = it.groupValues[2].ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[6] }
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            val formatArgs = it.groupValues.getOrNull(7)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body, formatArgs)
         } ?: ""
 
         // B. Object reply: message.reply({ content: '...' })
         if (replyText.isBlank()) {
             val contentPattern = Regex(
-                """content\s*:\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|`([\s\S]*?)`)""",
+                """content\s*:\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|`([\s\S]*?)`)(?:\s*\.format\s*\(([\s\S]*?)\))?""",
                 RegexOption.IGNORE_CASE
             )
             val objMatch = contentPattern.find(body)
             if (objMatch != null) {
                 val raw = objMatch.groupValues[2].ifEmpty { objMatch.groupValues[4] }.ifEmpty { objMatch.groupValues[5] }
-                replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+                val formatArgs = objMatch.groupValues.getOrNull(6)
+                replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body, formatArgs)
             }
         }
 
@@ -1007,13 +1009,14 @@ object BotCodeExecutor {
                 val varName = varMatch.groupValues[1]
                 if (!setOf("true", "false", "null", "undefined").contains(varName.lowercase())) {
                     val varDeclPattern = Regex(
-                        """(?:const|let|var)\s+${Regex.escape(varName)}\s*=\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|`([\s\S]*?)`)""",
+                        """(?:const|let|var|[a-zA-Z0-9_]+)?\s*${Regex.escape(varName)}\s*=\s*(?:(['"`])([\s\S]*?)\1|f(['"`])([\s\S]*?)\3|`([\s\S]*?)`)(?:\s*\.format\s*\(([\s\S]*?)\))?""",
                         RegexOption.IGNORE_CASE
                     )
                     val declMatch = varDeclPattern.find(body)
                     if (declMatch != null) {
                         val raw = declMatch.groupValues[2].ifEmpty { declMatch.groupValues[4] }.ifEmpty { declMatch.groupValues[5] }
-                        replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+                        val formatArgs = declMatch.groupValues.getOrNull(6)
+                        replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body, formatArgs)
                     }
                 }
             }
@@ -1021,11 +1024,12 @@ object BotCodeExecutor {
 
         // D. General string concatenation or return statement: return '...' or message.channel.send(...)
         if (replyText.isBlank()) {
-            val returnPattern = Regex("""return\s+(?:(['"`])([\s\S]*?)\1|`([\s\S]*?)`)""", RegexOption.IGNORE_CASE)
+            val returnPattern = Regex("""return\s+(?:(['"`])([\s\S]*?)\1|`([\s\S]*?)`)(?:\s*\.format\s*\(([\s\S]*?)\))?""", RegexOption.IGNORE_CASE)
             val retMatch = returnPattern.find(body)
             if (retMatch != null) {
                 val raw = retMatch.groupValues[2].ifEmpty { retMatch.groupValues[3] }
-                replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+                val formatArgs = retMatch.groupValues.getOrNull(4)
+                replyText = resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body, formatArgs)
             }
         }
 
@@ -1052,7 +1056,7 @@ object BotCodeExecutor {
             val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
                 .ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[5] }.ifEmpty { it.groupValues[6] }
                 .ifEmpty { it.groupValues[7] }.ifEmpty { it.groupValues[8] }.ifEmpty { it.groupValues[9] }
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body)
         }
 
         val embedDescMatch = Regex(
@@ -1063,7 +1067,7 @@ object BotCodeExecutor {
             val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
                 .ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[5] }.ifEmpty { it.groupValues[6] }
                 .ifEmpty { it.groupValues[7] }.ifEmpty { it.groupValues[8] }.ifEmpty { it.groupValues[9] }
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body)
         }
 
         val embedColorMatch = Regex(
@@ -1084,7 +1088,7 @@ object BotCodeExecutor {
             val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
                 .ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[5] }.ifEmpty { it.groupValues[6] }
                 .ifEmpty { it.groupValues[7] }.ifEmpty { it.groupValues[8] }.ifEmpty { it.groupValues[9] }
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body)
         }
 
         val embedAuthorMatch = Regex(
@@ -1095,12 +1099,12 @@ object BotCodeExecutor {
             val raw = it.groupValues[1].ifEmpty { it.groupValues[2] }.ifEmpty { it.groupValues[3] }
                 .ifEmpty { it.groupValues[4] }.ifEmpty { it.groupValues[5] }.ifEmpty { it.groupValues[6] }
                 .ifEmpty { it.groupValues[7] }.ifEmpty { it.groupValues[8] }.ifEmpty { it.groupValues[9] }
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body)
         }
 
         // G. Extract Embed Fields
         val embedFields = extractEmbedFields(body) { raw ->
-            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId)
+            resolveVariables(raw, pingMs, authorUsername, authorId, argsJoined, project, guildName, guildId, guildMemberCount, guildOwnerId, body)
         }
 
         val hasEmbed = !embedTitle.isNullOrBlank() || !embedDescription.isNullOrBlank() || !embedFooter.isNullOrBlank() || embedFields.isNotEmpty()
@@ -1219,7 +1223,9 @@ object BotCodeExecutor {
         guildName: String? = null,
         guildId: String? = null,
         guildMemberCount: Int? = null,
-        guildOwnerId: String? = null
+        guildOwnerId: String? = null,
+        body: String? = null,
+        formatArgs: String? = null
     ): String {
         var text = rawText
         val ping = if (pingMs > 0) pingMs else Random.nextInt(18, 30)
@@ -1358,11 +1364,498 @@ object BotCodeExecutor {
         text = text.replace("\${new Date().toLocaleTimeString()}", currentTime)
             .replace("{time}", currentTime)
 
-        // Math / arithmetic resolution (e.g. 5 + 5 -> 10)
+        // Python dynamic f-strings, expressions, and format()
+        text = evaluatePythonDynamicString(
+            input = text,
+            body = body,
+            formatArgs = formatArgs,
+            pingMs = ping,
+            authorUsername = authorUsername,
+            authorId = authorId,
+            safeArgs = safeArgs,
+            guildName = effectiveGuildName,
+            guildId = effectiveGuildId,
+            guildMemberCount = effectiveMemberCount,
+            guildOwnerId = effectiveOwnerId,
+            botName = project.name,
+            botId = botId,
+            prefix = project.prefix
+        )
+
+        // Math / arithmetic resolution (e.g. ${ 5 + 5 } -> 10)
         text = evaluateArithmeticExpressions(text)
 
         text = text.replace("\\n", "\n")
         return text
+    }
+
+    private fun evaluatePythonDynamicString(
+        input: String,
+        body: String?,
+        formatArgs: String?,
+        pingMs: Int,
+        authorUsername: String,
+        authorId: String,
+        safeArgs: String,
+        guildName: String,
+        guildId: String,
+        guildMemberCount: String,
+        guildOwnerId: String,
+        botName: String,
+        botId: String,
+        prefix: String
+    ): String {
+        // Collect numeric variables from context
+        val numVars = mutableMapOf<String, Double>()
+        numVars["r"] = 7200.0 // Default 2 hours uptime
+        numVars["uptime"] = 7200.0
+        numVars["start_time"] = 0.0
+        numVars["ping"] = pingMs.toDouble()
+        numVars["latency"] = pingMs / 1000.0
+        numVars["bot.latency"] = pingMs / 1000.0
+        numVars["client.latency"] = pingMs / 1000.0
+
+        // Collect string variables from context
+        val strVars = mutableMapOf<String, String>()
+        strVars["user"] = authorUsername
+        strVars["author"] = authorUsername
+        strVars["author.name"] = authorUsername
+        strVars["author.mention"] = "<@$authorId>"
+        strVars["user.mention"] = "<@$authorId>"
+        strVars["ctx.author"] = authorUsername
+        strVars["ctx.author.name"] = authorUsername
+        strVars["ctx.author.mention"] = "<@$authorId>"
+        strVars["ctx.author.id"] = authorId
+        strVars["author.id"] = authorId
+        strVars["user.id"] = authorId
+        strVars["guild.name"] = guildName
+        strVars["ctx.guild.name"] = guildName
+        strVars["guild.id"] = guildId
+        strVars["ctx.guild.id"] = guildId
+        strVars["guild.member_count"] = guildMemberCount
+        strVars["ctx.guild.member_count"] = guildMemberCount
+        strVars["bot.name"] = botName
+        strVars["client.user.name"] = botName
+        strVars["prefix"] = prefix
+        strVars["ctx.prefix"] = prefix
+        strVars["args"] = safeArgs
+
+        // Parse variable declarations/assignments in body
+        if (!body.isNullOrBlank()) {
+            val assignPattern = Regex("""(?m)^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([^#\r\n]+)""")
+            for (m in assignPattern.findAll(body)) {
+                val varName = m.groupValues[1].trim()
+                val rhs = m.groupValues[2].trim()
+
+                val doubleVal = rhs.toDoubleOrNull()
+                if (doubleVal != null) {
+                    numVars[varName] = doubleVal
+                    continue
+                }
+
+                val parsedMath = evaluateMathOrNull(rhs, numVars)
+                if (parsedMath != null) {
+                    numVars[varName] = parsedMath
+                    continue
+                }
+
+                val strMatch = Regex("""^['"]([^'"]*)['"]$""").find(rhs)
+                if (strMatch != null) {
+                    strVars[varName] = strMatch.groupValues[1]
+                }
+            }
+        }
+
+        var result = input
+
+        // 1. Handle .format(...) if arguments were supplied or appended
+        val effectiveFormatArgs = formatArgs ?: run {
+            val trailingFormat = Regex("""\s*\.\s*format\((.*)\)\s*$""", RegexOption.DOT_MATCHES_ALL).find(result)
+            if (trailingFormat != null) {
+                result = result.substring(0, trailingFormat.range.first)
+                trailingFormat.groupValues[1]
+            } else null
+        }
+
+        if (!effectiveFormatArgs.isNullOrBlank()) {
+            val parsedArgs = splitArguments(effectiveFormatArgs)
+            val posArgs = mutableListOf<String>()
+            val kwArgs = mutableMapOf<String, String>()
+
+            for (arg in parsedArgs) {
+                val kwMatch = Regex("""^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*)$""").find(arg)
+                if (kwMatch != null) {
+                    val k = kwMatch.groupValues[1]
+                    val v = evaluateExpressionString(kwMatch.groupValues[2], numVars, strVars)
+                    kwArgs[k] = v
+                } else {
+                    posArgs.add(evaluateExpressionString(arg, numVars, strVars))
+                }
+            }
+
+            var posIndex = 0
+            val braceRegex = Regex("""\{([a-zA-Z0-9_]*)\}""")
+            result = braceRegex.replace(result) { match ->
+                val placeholder = match.groupValues[1]
+                if (placeholder.isEmpty()) {
+                    if (posIndex < posArgs.size) posArgs[posIndex++] else match.value
+                } else {
+                    val idx = placeholder.toIntOrNull()
+                    if (idx != null && idx in posArgs.indices) {
+                        posArgs[idx]
+                    } else if (kwArgs.containsKey(placeholder)) {
+                        kwArgs[placeholder] ?: ""
+                    } else if (strVars.containsKey(placeholder)) {
+                        strVars[placeholder] ?: ""
+                    } else if (numVars.containsKey(placeholder)) {
+                        formatDouble(numVars[placeholder] ?: 0.0)
+                    } else {
+                        match.value
+                    }
+                }
+            }
+        }
+
+        // 2. Evaluate curly brace expressions {expr} or {expr:format} (f-string and dynamic Python expressions)
+        result = evaluateBracedExpressions(result, numVars, strVars)
+
+        return result
+    }
+
+    private fun evaluateBracedExpressions(
+        text: String,
+        numVars: Map<String, Double>,
+        strVars: Map<String, String>
+    ): String {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (c == '{') {
+                if (i + 1 < text.length && text[i + 1] == '{') {
+                    sb.append('{')
+                    i += 2
+                    continue
+                }
+                // Scan to matching '}' taking nested braces into account
+                var depth = 1
+                var j = i + 1
+                while (j < text.length && depth > 0) {
+                    if (text[j] == '{') depth++
+                    else if (text[j] == '}') depth--
+                    j++
+                }
+
+                if (depth == 0) {
+                    val inner = text.substring(i + 1, j - 1).trim()
+                    sb.append(evaluateSingleBracedExpression(inner, numVars, strVars))
+                    i = j
+                } else {
+                    sb.append(c)
+                    i++
+                }
+            } else if (c == '}') {
+                if (i + 1 < text.length && text[i + 1] == '}') {
+                    sb.append('}')
+                    i += 2
+                } else {
+                    sb.append('}')
+                    i++
+                }
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun evaluateSingleBracedExpression(
+        inner: String,
+        numVars: Map<String, Double>,
+        strVars: Map<String, String>
+    ): String {
+        if (inner.isEmpty()) return "{}"
+
+        // Detect format specifier like {val:02d} or {val:.2f}
+        var parenDepth = 0
+        var colonIndex = -1
+        for (idx in inner.indices) {
+            when (inner[idx]) {
+                '(' -> parenDepth++
+                ')' -> if (parenDepth > 0) parenDepth--
+                ':' -> if (parenDepth == 0) colonIndex = idx
+            }
+        }
+
+        val exprStr = if (colonIndex != -1) inner.substring(0, colonIndex).trim() else inner.trim()
+        val formatSpec = if (colonIndex != -1) inner.substring(colonIndex + 1).trim() else null
+
+        val evaluatedVal = evaluateExpressionString(exprStr, numVars, strVars)
+
+        if (formatSpec != null) {
+            val numVal = evaluatedVal.toDoubleOrNull()
+            if (numVal != null) {
+                return try {
+                    when {
+                        formatSpec.endsWith("d") -> {
+                            val width = formatSpec.removeSuffix("d")
+                            if (width.startsWith("0")) {
+                                String.format(Locale.US, "%${width}d", numVal.toLong())
+                            } else {
+                                String.format(Locale.US, "%d", numVal.toLong())
+                            }
+                        }
+                        formatSpec.endsWith("f") -> {
+                            String.format(Locale.US, "%$formatSpec", numVal)
+                        }
+                        else -> evaluatedVal
+                    }
+                } catch (e: Exception) {
+                    evaluatedVal
+                }
+            }
+        }
+
+        return evaluatedVal
+    }
+
+    private fun evaluateExpressionString(
+        expr: String,
+        numVars: Map<String, Double>,
+        strVars: Map<String, String>
+    ): String {
+        val trimmed = expr.trim()
+        if (trimmed.isEmpty()) return ""
+
+        // Check if string literal
+        if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+            return trimmed.substring(1, trimmed.length - 1)
+        }
+
+        // Direct string variable lookup
+        val directStr = strVars[trimmed] ?: strVars[trimmed.lowercase()]
+        if (directStr != null) {
+            return directStr
+        }
+
+        // Math / function parsing
+        val mathVal = evaluateMathOrNull(trimmed, numVars)
+        if (mathVal != null) {
+            return formatDouble(mathVal)
+        }
+
+        // Variable lookup in numVars directly
+        val directNum = numVars[trimmed] ?: numVars[trimmed.lowercase()]
+        if (directNum != null) {
+            return formatDouble(directNum)
+        }
+
+        return trimmed
+    }
+
+    private fun evaluateMathOrNull(expr: String, vars: Map<String, Double>): Double? {
+        return MathExprParser(expr, vars).parse()
+    }
+
+    private fun formatDouble(v: Double): String {
+        return if (v == v.toLong().toDouble()) {
+            v.toLong().toString()
+        } else {
+            v.toString()
+        }
+    }
+
+    private fun splitArguments(argsStr: String): List<String> {
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var parenDepth = 0
+        var inSingleQuote = false
+        var inDoubleQuote = false
+
+        for (c in argsStr) {
+            when (c) {
+                '\'' -> if (!inDoubleQuote) inSingleQuote = !inSingleQuote
+                '"' -> if (!inSingleQuote) inDoubleQuote = !inDoubleQuote
+                '(' -> if (!inSingleQuote && !inDoubleQuote) parenDepth++
+                ')' -> if (!inSingleQuote && !inDoubleQuote && parenDepth > 0) parenDepth--
+                ',' -> {
+                    if (!inSingleQuote && !inDoubleQuote && parenDepth == 0) {
+                        result.add(current.toString().trim())
+                        current.clear()
+                        continue
+                    }
+                }
+            }
+            current.append(c)
+        }
+        if (current.isNotBlank()) {
+            result.add(current.toString().trim())
+        }
+        return result
+    }
+
+    private class MathExprParser(
+        private val input: String,
+        private val vars: Map<String, Double>
+    ) {
+        private var pos = 0
+
+        fun parse(): Double? {
+            return try {
+                pos = 0
+                val result = parseAdditive()
+                skipWhitespace()
+                if (pos < input.length) null else result
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        private fun parseAdditive(): Double {
+            var left = parseMultiplicative()
+            while (true) {
+                skipWhitespace()
+                if (match("+")) {
+                    left += parseMultiplicative()
+                } else if (match("-")) {
+                    left -= parseMultiplicative()
+                } else {
+                    break
+                }
+            }
+            return left
+        }
+
+        private fun parseMultiplicative(): Double {
+            var left = parsePower()
+            while (true) {
+                skipWhitespace()
+                if (match("//")) {
+                    val right = parsePower()
+                    left = if (right != 0.0) Math.floor(left / right) else 0.0
+                } else if (match("/")) {
+                    val right = parsePower()
+                    left = if (right != 0.0) left / right else 0.0
+                } else if (match("%")) {
+                    val right = parsePower()
+                    left = if (right != 0.0) ((left % right) + right) % right else 0.0
+                } else if (match("*") && !peek("*")) {
+                    left *= parsePower()
+                } else {
+                    break
+                }
+            }
+            return left
+        }
+
+        private fun parsePower(): Double {
+            val left = parseUnary()
+            skipWhitespace()
+            if (match("**")) {
+                val right = parsePower()
+                return Math.pow(left, right)
+            }
+            return left
+        }
+
+        private fun parseUnary(): Double {
+            skipWhitespace()
+            if (match("+")) {
+                return parseUnary()
+            }
+            if (match("-")) {
+                return -parseUnary()
+            }
+            return parsePrimary()
+        }
+
+        private fun parsePrimary(): Double {
+            skipWhitespace()
+            if (pos >= input.length) return 0.0
+
+            if (match("(")) {
+                val result = parseAdditive()
+                skipWhitespace()
+                match(")")
+                return result
+            }
+
+            // Number literal
+            if (input[pos].isDigit() || (input[pos] == '.' && pos + 1 < input.length && input[pos + 1].isDigit())) {
+                val start = pos
+                while (pos < input.length && (input[pos].isDigit() || input[pos] == '.')) {
+                    pos++
+                }
+                return input.substring(start, pos).toDoubleOrNull() ?: 0.0
+            }
+
+            // Identifier / Function call / Variable
+            if (input[pos].isLetter() || input[pos] == '_') {
+                val start = pos
+                while (pos < input.length && (input[pos].isLetterOrDigit() || input[pos] == '_' || input[pos] == '.')) {
+                    pos++
+                }
+                val ident = input.substring(start, pos)
+                skipWhitespace()
+
+                // Check for function call
+                if (match("(")) {
+                    val args = mutableListOf<Double>()
+                    skipWhitespace()
+                    if (!peek(")")) {
+                        args.add(parseAdditive())
+                        while (match(",")) {
+                            args.add(parseAdditive())
+                        }
+                    }
+                    match(")")
+
+                    return when (ident.lowercase()) {
+                        "int" -> args.getOrNull(0)?.toLong()?.toDouble() ?: 0.0
+                        "round" -> {
+                            val v = args.getOrNull(0) ?: 0.0
+                            val decimals = args.getOrNull(1)?.toInt() ?: 0
+                            if (decimals == 0) Math.round(v).toDouble()
+                            else {
+                                val factor = Math.pow(10.0, decimals.toDouble())
+                                Math.round(v * factor) / factor
+                            }
+                        }
+                        "float" -> args.getOrNull(0) ?: 0.0
+                        "abs" -> Math.abs(args.getOrNull(0) ?: 0.0)
+                        "max" -> args.maxOrNull() ?: 0.0
+                        "min" -> args.minOrNull() ?: 0.0
+                        "time.time" -> 7200.0
+                        else -> args.getOrNull(0) ?: 0.0
+                    }
+                }
+
+                // Variable lookup
+                return vars[ident] ?: vars[ident.lowercase()] ?: 0.0
+            }
+
+            pos++
+            return 0.0
+        }
+
+        private fun skipWhitespace() {
+            while (pos < input.length && input[pos].isWhitespace()) pos++
+        }
+
+        private fun match(expected: String): Boolean {
+            skipWhitespace()
+            if (input.startsWith(expected, pos)) {
+                pos += expected.length
+                return true
+            }
+            return false
+        }
+
+        private fun peek(expected: String): Boolean {
+            skipWhitespace()
+            return input.startsWith(expected, pos)
+        }
     }
 
     private fun evaluateArithmeticExpressions(input: String): String {

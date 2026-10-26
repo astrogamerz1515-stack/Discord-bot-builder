@@ -34,17 +34,31 @@ object GeminiApiClient {
         return keys.any { it.apiKey.isNotBlank() }
     }
 
+    const val PYTHON_DISCORD_FSTRING_RULE = """
+CRITICAL PYTHON DISCORD STRING FORMATTING RULE:
+When generating Python code (discord.py, disnake, etc.), whenever a string literal contains variable or expression interpolation inside curly braces `{...}` (e.g., `{int(r//3600)}h`, `{round(bot.latency*1000)}ms`, `{ctx.author.name}`), you MUST ALWAYS prefix the string literal with an `f` to create an f-string (e.g., `f"{int(r//3600)}h"`, `await ctx.send(f"Uptime: {int(r//3600)}h")`).
+NEVER output a raw string containing `{expression}` without the `f` prefix or without calling `.format(...)`.
+If using `.format(...)`, ensure the dot and syntax are strictly valid: `"Hello {}".format(user)`.
+Always output dynamic strings, never raw unformatted expressions.
+"""
+
     suspend fun callAiWithFailover(
         prompt: String,
         systemInstruction: String? = null
     ): AiCallResult = withContext(Dispatchers.IO) {
+        val effectiveSystemInstruction = if (systemInstruction.isNullOrBlank()) {
+            PYTHON_DISCORD_FSTRING_RULE.trimIndent()
+        } else {
+            "${systemInstruction.trim()}\n\n${PYTHON_DISCORD_FSTRING_RULE.trimIndent()}"
+        }
+
         val preferredProvider = AiKeyManager.selectedProvider.value
         val preferredModel = AiKeyManager.selectedModel.value
 
         // 1. Try Preferred Provider
         val primaryKey = AiKeyManager.getActiveKeyForProvider(preferredProvider)
         if (!primaryKey.isNullOrBlank()) {
-            val result = executeProviderCall(preferredProvider, preferredModel, primaryKey, prompt, systemInstruction)
+            val result = executeProviderCall(preferredProvider, preferredModel, primaryKey, prompt, effectiveSystemInstruction)
             if (result != null && !result.quotaWarning) {
                 AiKeyManager.incrementUsage(preferredProvider)
                 return@withContext result
@@ -57,7 +71,7 @@ object GeminiApiClient {
         if (AiKeyManager.autoFallbackEnabled.value) {
             val backup = AiKeyManager.getBackupProvider(preferredProvider)
             if (backup != null) {
-                val backupResult = executeProviderCall(backup.first, backup.first.defaultModel, backup.second, prompt, systemInstruction)
+                val backupResult = executeProviderCall(backup.first, backup.first.defaultModel, backup.second, prompt, effectiveSystemInstruction)
                 if (backupResult != null && !backupResult.quotaWarning) {
                     AiKeyManager.incrementUsage(backup.first)
                     return@withContext backupResult.copy(

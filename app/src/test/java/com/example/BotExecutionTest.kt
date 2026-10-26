@@ -446,5 +446,117 @@ class BotExecutionTest {
         assertNotNull(customPkg)
         assertTrue(com.example.packages.PackageManager.isInstalled(customPkg.id))
     }
+
+    @Test
+    fun testPythonFStringExecutionUptimeCalculation() = runBlocking {
+        val project = BotProject(name = "PyBot", description = "Python Bot", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 1,
+                filePath = "bot.py",
+                isEntrypoint = true,
+                content = """
+                    @bot.command()
+                    async def uptime(ctx):
+                        await ctx.send("{int(r//3600)}h")
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!uptime",
+            authorUsername = "Tester",
+            authorId = "111",
+            project = project,
+            files = files,
+            gatewayPingMs = 25
+        )
+
+        assertTrue("Command should be handled", result.isHandled)
+        assertEquals("Should evaluate expression dynamically to 2h, not raw text", "2h", result.replyText)
+    }
+
+    @Test
+    fun testPythonFStringPrefixedExecution() = runBlocking {
+        val project = BotProject(name = "PyBot", description = "Python Bot", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 1,
+                filePath = "bot.py",
+                isEntrypoint = true,
+                content = """
+                    @bot.command()
+                    async def uptime(ctx):
+                        r = 7200
+                        await ctx.send(f"Uptime: {int(r//3600)}h {int((r%3600)//60)}m")
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!uptime",
+            authorUsername = "Tester",
+            authorId = "111",
+            project = project,
+            files = files,
+            gatewayPingMs = 25
+        )
+
+        assertTrue(result.isHandled)
+        assertEquals("Uptime: 2h 0m", result.replyText)
+    }
+
+    @Test
+    fun testPythonDotFormatExecution() = runBlocking {
+        val project = BotProject(name = "PyBot", description = "Python Bot", prefix = "!")
+        val files = listOf(
+            BotFile(
+                projectId = 1,
+                filePath = "bot.py",
+                isEntrypoint = true,
+                content = """
+                    @bot.command()
+                    async def greet(ctx):
+                        await ctx.send("Hello {}".format(ctx.author.name))
+                """.trimIndent()
+            )
+        )
+
+        val result = BotCodeExecutor.executeIncomingMessage(
+            messageContent = "!greet",
+            authorUsername = "Alex",
+            authorId = "222",
+            project = project,
+            files = files,
+            gatewayPingMs = 25
+        )
+
+        assertTrue(result.isHandled)
+        assertEquals("Hello Alex", result.replyText)
+    }
+
+    @Test
+    fun testPythonAutoFixerAddsFPrefix() {
+        val rawPythonCode = """
+            @bot.command()
+            async def uptime(ctx):
+                await ctx.send("{int(r//3600)}h")
+        """.trimIndent()
+
+        val fixResult = com.example.util.BotCodeAutoFixer.ensurePythonFStrings(rawPythonCode)
+        assertTrue(fixResult.wasModified)
+        assertTrue(fixResult.fixedCode.contains("f\"{int(r//3600)}h\""))
+    }
+
+    @Test
+    fun testPythonAutoFixerRepairsMissingDotInFormat() {
+        val rawPythonCode = """
+            msg = "Hello {}"format(user)
+        """.trimIndent()
+
+        val fixResult = com.example.util.BotCodeAutoFixer.ensurePythonFStrings(rawPythonCode)
+        assertTrue(fixResult.wasModified)
+        assertTrue(fixResult.fixedCode.contains("\"Hello {}\".format(user)"))
+    }
 }
 

@@ -700,8 +700,125 @@ async def info(ctx):
             fixes.add("Added starter commands (!ping, !info) to make bot immediately active")
         }
 
+        // 7. Scan and auto-prefix all string literals containing {} with 'f' (f-strings)
+        val fStringFixResult = ensurePythonFStrings(code)
+        if (fStringFixResult.wasModified) {
+            code = fStringFixResult.fixedCode
+            fixes.addAll(fStringFixResult.fixesApplied)
+        }
+
         return AutoFixResult(
             fixedCode = code,
+            fixesApplied = fixes,
+            wasModified = fixes.isNotEmpty()
+        )
+    }
+
+    /**
+     * Scans Python code for string literals containing curly braces {} for variables/expressions.
+     * 1. Ensures strings with variables are prefixed with 'f' (e.g. f"Hello {user}").
+     * 2. If .format() is used, ensures it is used correctly (e.g. "Hello {}".format(user)).
+     */
+    fun ensurePythonFStrings(rawCode: String): AutoFixResult {
+        val fixes = mutableListOf<String>()
+        val sb = StringBuilder()
+        var i = 0
+        val len = rawCode.length
+
+        while (i < len) {
+            val c = rawCode[i]
+
+            // Skip comments (# to end of line)
+            if (c == '#') {
+                while (i < len && rawCode[i] != '\n') {
+                    sb.append(rawCode[i])
+                    i++
+                }
+                continue
+            }
+
+            // Check if this is the start of a string literal
+            val isTripleDouble = rawCode.startsWith("\"\"\"", i)
+            val isTripleSingle = rawCode.startsWith("'''", i)
+            val isSingleDouble = c == '"'
+            val isSingleSingle = c == '\''
+
+            if (isTripleDouble || isTripleSingle || isSingleDouble || isSingleSingle) {
+                val quoteStr = when {
+                    isTripleDouble -> "\"\"\""
+                    isTripleSingle -> "'''"
+                    isSingleDouble -> "\""
+                    else -> "'"
+                }
+                val quoteLen = quoteStr.length
+
+                // Check preceding prefix character in sb
+                val charBeforeQuote = if (sb.isNotEmpty()) sb.last() else '\u0000'
+                val isPrefixedWithF = charBeforeQuote == 'f' || charBeforeQuote == 'F' ||
+                        (sb.length >= 2 && sb.takeLast(2).toString().lowercase() in setOf("fr", "rf"))
+
+                // Find closing quote
+                val contentStart = i + quoteLen
+                var contentEnd = -1
+                var scanIdx = contentStart
+                while (scanIdx < len) {
+                    if (rawCode[scanIdx] == '\\') {
+                        scanIdx += 2 // Skip escaped character
+                        continue
+                    }
+                    if (rawCode.startsWith(quoteStr, scanIdx)) {
+                        contentEnd = scanIdx
+                        break
+                    }
+                    scanIdx++
+                }
+
+                if (contentEnd != -1) {
+                    val stringContent = rawCode.substring(contentStart, contentEnd)
+                    val afterClosingQuoteIdx = contentEnd + quoteLen
+
+                    // Check if followed by .format(...)
+                    var lookAhead = afterClosingQuoteIdx
+                    while (lookAhead < len && (rawCode[lookAhead] == ' ' || rawCode[lookAhead] == '\t')) {
+                        lookAhead++
+                    }
+                    val hasDotFormat = rawCode.startsWith(".format(", lookAhead) || rawCode.startsWith(".format (", lookAhead)
+                    val hasMissingDotFormat = rawCode.startsWith("format(", lookAhead) || rawCode.startsWith("format (", lookAhead)
+
+                    // Check if string contains variable interpolation braces: {expr}
+                    val containsBracedExpression = Regex("""(?<!\{)\{([^{}]+)\}(?!\})""").containsMatchIn(stringContent)
+                    val containsEmptyBraces = stringContent.contains("{}")
+
+                    if (hasMissingDotFormat) {
+                        // Fix missing dot in format call e.g. "Hello {}"format(user) -> "Hello {}".format(user)
+                        sb.append(quoteStr)
+                        sb.append(stringContent)
+                        sb.append(quoteStr)
+                        sb.append(".")
+                        i = lookAhead
+                        fixes.add("Fixed missing '.' before format(...) call on string literal")
+                        continue
+                    } else if (!isPrefixedWithF && !hasDotFormat && (containsBracedExpression || containsEmptyBraces)) {
+                        // Prefix with 'f' to make it an active f-string
+                        sb.append('f')
+                        sb.append(quoteStr)
+                        sb.append(stringContent)
+                        sb.append(quoteStr)
+                        i = afterClosingQuoteIdx
+                        val preview = if (stringContent.length > 25) stringContent.take(22) + "..." else stringContent
+                        fixes.add("Converted string '$preview' containing {} to active f-string (f$quoteStr...$quoteStr)")
+                        continue
+                    }
+                }
+            }
+
+            sb.append(c)
+            i++
+        }
+
+        val resultStr = sb.toString()
+        return AutoFixResult(
+            fixedCode = resultStr,
             fixesApplied = fixes,
             wasModified = fixes.isNotEmpty()
         )
